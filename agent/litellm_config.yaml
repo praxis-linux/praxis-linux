@@ -1,0 +1,74 @@
+# LiteLLM proxy configuration for Praxis
+#
+# The agent never talks to Ollama or cloud providers directly.
+# It talks to LiteLLM, which routes by model name.
+# This is what makes "bring your own model" trivial.
+#
+# Run:
+#   pip install 'litellm[proxy]'
+#   litellm --config litellm_config.yaml --port 4000
+#
+# Then the agent uses OpenAI-compatible API at http://localhost:4000
+
+model_list:
+  # ---- Local models (via Ollama) ----
+  - model_name: local-fast
+    litellm_params:
+      model: ollama/qwen2.5:7b
+      api_base: http://localhost:11434
+
+  - model_name: local-coder
+    litellm_params:
+      model: ollama/qwen2.5-coder:7b
+      api_base: http://localhost:11434
+
+  - model_name: local-tiny
+    # Used by the router for intent classification — must be fast
+    litellm_params:
+      model: ollama/qwen2.5:3b
+      api_base: http://localhost:11434
+
+  - model_name: local-embed
+    litellm_params:
+      model: ollama/nomic-embed-text
+      api_base: http://localhost:11434
+
+  # ---- Cloud models (BYO key) ----
+  # Comment out any provider you don't use. Praxis never hard-codes a default cloud provider.
+
+  - model_name: cloud-strong
+    litellm_params:
+      model: anthropic/claude-opus-4-7
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: cloud-balanced
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: cloud-fast
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # - model_name: cloud-strong
+  #   litellm_params:
+  #     model: openai/gpt-4o
+  #     api_key: os.environ/OPENAI_API_KEY
+
+  # - model_name: cloud-strong
+  #   litellm_params:
+  #     model: gemini/gemini-2.5-pro
+  #     api_key: os.environ/GEMINI_API_KEY
+
+# ---- General settings ----
+litellm_settings:
+  drop_params: true        # Silently drop unsupported params per provider
+  set_verbose: false
+  cache: false             # We do our own caching at the agent layer
+
+# ---- Privacy / audit ----
+# Every cloud call is logged by the agent's audit module. LiteLLM's own logging
+# is intentionally off here to avoid duplicate logs.
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY  # Optional; protects the proxy port

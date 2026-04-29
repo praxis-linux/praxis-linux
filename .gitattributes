@@ -1,0 +1,18 @@
+# Enforce LF line endings for all text files in this Linux project.
+# This prevents Windows from checking out CRLF and committing it back.
+* text=auto eol=lf
+
+# Explicitly binary — never touch line endings
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+*.otf  binary
+*.AppImage binary
+*.iso  binary
+*.gguf binary
+*.safetensors binary

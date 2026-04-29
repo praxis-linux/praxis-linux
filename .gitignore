@@ -1,0 +1,61 @@
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Editors ---
+.vscode/
+.idea/
+*.swp
+*~
+
+# --- Node / pnpm ---
+node_modules/
+.pnpm-store/
+dist/
+build/
+.next/
+*.tsbuildinfo
+
+# --- Rust / Tauri ---
+target/
+canvas/src-tauri/target/
+canvas/src-tauri/gen/
+*.pdb
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Local data / models ---
+*.gguf
+*.safetensors
+.praxis/
+audit.db
+qdrant_storage/
+
+# --- Claude Code ---
+.claude/
+
+# --- Secrets ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Build artifacts ---
+*.AppImage
+*.flatpak
+*.iso
