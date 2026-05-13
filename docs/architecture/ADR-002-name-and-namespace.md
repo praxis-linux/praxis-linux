@@ -47,7 +47,7 @@ The name aligns with the manifesto's central claim: *apps are answers, not desti
 |---|---|---|---|
 | Pronounceable first try | ✅ | ✅ | ❌ |
 | Spellable from hearing | ✅ | ⚠️ | ❌ |
-| Namespace available | ✅ (with `-linux` suffix) | ❌ (heavily contested) | ✅ |
+| Namespace available | ✅ (with `-os` suffix) | ❌ (heavily contested) | ✅ |
 | First-page SEO ownable | ⚠️ (vs Praxis test, PraxisLIVE) | ❌ (commodity) | ❌ (Kuala Lumpur) |
 | Carries meaning | ✅ (action) | ✅ (medium/substrate) | ❌ |
 | No vulgar/negative connotations across major languages | ✅ | ✅ | ❌ (Urban Dictionary) |
@@ -77,7 +77,7 @@ We acknowledge:
 1. Lead with "Praxis Linux" in `<title>` tags, README headers, meta descriptions
 2. Hashtag `#PraxisLinux` on all social posts
 3. Pinned post / first launch post explicitly disambiguates
-4. Domain: prefer `praxislinux.dev` (developer audience) over `.com`
+4. Domain: prefer `praxis.dev` (developer audience) over `.com`
 
 ## Consequences
 

@@ -53,16 +53,7 @@ Lighter than Electron. Rust core gives us system integration and security. React
 
 ### 7. Local model runtime: Ollama (default), llama.cpp (embedded), vLLM (workstation)
 
-Ollama is the de facto standard with MCP support. Ship a model bundle sized to detected hardware at install time:
-
-| Detected hardware | Default bundle |
-|---|---|
-| < 8 GB RAM | Phi-4-mini, Qwen 2.5 3B |
-| 8–16 GB RAM | Llama 3.3 8B, Qwen 2.5 7B Coder |
-| 16–32 GB + GPU | Qwen 2.5 14B, Phi-4 14B, DeepSeek-Coder 16B |
-| 32 GB+ / multi-GPU | Llama 3.3 70B quantized, Qwen 2.5 32B |
-
-The smallest bundle must work without a GPU. The installer detects VRAM and selects accordingly.
+Ollama is the de facto standard with MCP support. Ship a model bundle sized to detected hardware (Phi-4-mini up through Qwen 2.5 32B / Llama 3.3 70B quantized).
 
 ### 8. Cloud abstraction: LiteLLM proxy
 
@@ -82,23 +73,7 @@ Apache (not GPL) to maximise downstream adoption — both individuals and compan
 
 ### 12. Privacy posture: legible, reversible, consented
 
-Every cloud call shows a transient toast ("Sending N tokens to cloud-strong"). Audit log at `~/.praxis/audit.db`. Btrfs snapshots before any agent-initiated filesystem or system change. Single hotkey kill switch.
-
-### 13. Voice I/O: whisper.cpp (STT) + Piper (TTS)
-
-Both are local, open-weight, and fast enough for real-time desktop use. whisper.cpp handles speech-to-text for the Intent layer; Piper handles text-to-speech for agent responses. Neither sends audio to the cloud.
-
-### 14. Sandboxing: bubblewrap + Flatpak
-
-Agent-executed shell commands run in bubblewrap namespaces. Third-party apps are delivered as Flatpaks. This limits the blast radius of a misconfigured or misled agent action. First-party MCP servers run with the minimum capabilities they need (declared in their manifest).
-
-### 15. Update strategy: A/B Btrfs subvolumes
-
-The system partition is divided into A/B subvolumes. An update writes to the inactive subvolume and flips the bootloader pointer. If the new subvolume fails to boot, the bootloader rolls back automatically. Snapper creates pre/post snapshots for every agent-initiated system change, independently of the A/B cycle.
-
-### 16. Observability: OpenTelemetry (optional)
-
-Agent spans are instrumented with OpenTelemetry. By default traces are written to a local SQLite sink. Users who opt in can forward to Grafana Tempo or any OTLP endpoint. This is never on by default — it is a power-user diagnostic feature.
+Every cloud call shows a transient toast. Audit log at `~/.praxis/audit.db`. Btrfs snapshots before any agent-initiated filesystem or system change. Single hotkey kill switch.
 
 ## Consequences
 

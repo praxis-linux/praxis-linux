@@ -36,11 +36,11 @@ Conventional Commits format: `feat(canvas): add file mode renderer`. The roadmap
 
 ## Code of Conduct
 
-By participating, you agree to abide by the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) (Contributor Covenant 2.1).
+By participating, you agree to uphold a basic standard of respectful, constructive collaboration. We will adopt the Contributor Covenant formally before Phase 1; in the meantime, treat people the way you would want to be treated when you submitted your first patch to an open project.
 
 ## Security
 
-Found a vulnerability? Don't open a public issue. See [`SECURITY.md`](SECURITY.md) for the responsible disclosure process.
+Found a vulnerability? Don't open a public issue. Email the address listed in `SECURITY.md` (lands with M0.12).
 
 ## Ownership
 

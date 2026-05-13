@@ -10,7 +10,7 @@ The name is from the Greek *praxis* (πρᾶξις) — *action; the moment thou
 
 ## Status
 
-**Phase 0 — Spike.** Repository scaffolded. Building the Canvas as a Linux app first. Not yet runnable.
+**Phase 0 — Spike.** Building the Canvas as a Linux app first. Not yet runnable.
 
 ## Principles
 
