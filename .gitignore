@@ -20,7 +20,6 @@ build/
 target/
 canvas/src-tauri/target/
 canvas/src-tauri/gen/
-canvas/src-tauri/Cargo.lock
 *.pdb
 
 # --- Python ---
