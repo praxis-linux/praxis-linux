@@ -25,7 +25,7 @@ This document is the single source of truth for project progress. Every status u
 - [x] **M0.2** — Public repository created and scaffolded, pushed to `github.com/praxis-linux/praxis-linux`
 - [ ] **M0.3** — Public presence reserved: GitHub org (`praxis-linux`) ✅, X handle (`@PraxisLinux`), domain (`praxislinux.dev`)
 - [x] **M0.4** — Dev toolchain installed locally (Rust, Node, pnpm, Python, Ollama)
-- [ ] **M0.5** — Tauri canvas app scaffolded and renders a minimal A2UI payload
+- [x] **M0.5** — Tauri canvas app scaffolded and renders a minimal A2UI payload
 - [ ] **M0.6** — Backend agent service stood up (FastAPI + PydanticAI)
 - [ ] **M0.7** — LiteLLM proxy wired to Ollama (local) and one cloud provider (Anthropic or OpenAI)
 - [ ] **M0.8** — First MCP server (filesystem) integrated end-to-end
@@ -35,7 +35,7 @@ This document is the single source of truth for project progress. Every status u
 - [ ] **M0.12** — Privacy guardrails: audit log, cloud-call toast, kill switch hotkey
 - [ ] **M0.13** — 90-second demo video published; pre-launch post drafted
 
-**Phase 0 progress: 3 / 13 milestones complete (~23%).**
+**Phase 0 progress: 4 / 13 milestones complete (~31%).**
 
 ---
 

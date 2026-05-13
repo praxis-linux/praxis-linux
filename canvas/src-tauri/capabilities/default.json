@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for Praxis Canvas",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

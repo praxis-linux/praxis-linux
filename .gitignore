@@ -52,6 +52,9 @@ qdrant_storage/
 *.log
 logs/
 
+# --- Claude Code ---
+.claude/
+
 # --- Build artifacts ---
 *.AppImage
 *.flatpak
