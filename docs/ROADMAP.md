@@ -22,8 +22,8 @@ This document is the single source of truth for project progress. Every status u
 ### Milestones
 
 - [x] **M0.1** — Strategic foundation: manifesto, name locked (Praxis), license chosen (Apache 2.0)
-- [ ] **M0.2** — Public repository created and scaffolded (this file present)
-- [ ] **M0.3** — Public presence reserved: GitHub org, X handle, LinkedIn approach decided
+- [x] **M0.2** — Public repository created and scaffolded, pushed to `github.com/praxis-linux/praxis-linux`
+- [ ] **M0.3** — Public presence reserved: GitHub org (`praxis-linux`) ✅, X handle (`@PraxisLinux`), domain (`praxislinux.dev`)
 - [ ] **M0.4** — Dev toolchain installed locally (Rust, Node, pnpm, Python, Ollama)
 - [ ] **M0.5** — Tauri canvas app scaffolded and renders a minimal A2UI payload
 - [ ] **M0.6** — Backend agent service stood up (FastAPI + PydanticAI)
@@ -35,7 +35,7 @@ This document is the single source of truth for project progress. Every status u
 - [ ] **M0.12** — Privacy guardrails: audit log, cloud-call toast, kill switch hotkey
 - [ ] **M0.13** — 90-second demo video published; pre-launch post drafted
 
-**Phase 0 progress: 1 / 13 milestones complete (~8%).**
+**Phase 0 progress: 2 / 13 milestones complete (~15%).**
 
 ---
 
