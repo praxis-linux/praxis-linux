@@ -1,0 +1,38 @@
+[project]
+name = "praxis-agent"
+version = "0.1.0"
+description = "Praxis agent runtime — router, planner, A2UI emission, audit log"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "pydantic>=2.9",
+    "pydantic-ai-slim[openai]>=2.0",
+    "mcp>=2.0",
+    "praxis-fs",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.8"]
+
+[tool.uv.sources]
+praxis-fs = { path = "../mcp-servers/praxis-fs", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/praxis_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
