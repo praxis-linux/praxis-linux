@@ -24,15 +24,31 @@ This repository is intentionally early. Star the repo to follow along.
 | Directory      | Purpose |
 |----------------|---------|
 | `canvas/`      | Tauri 2 + React desktop application — the Canvas |
-| `agent/`       | Python agent runtime (router, memory, MCP client) |
+| `agent/`       | Python agent runtime (router, planner, file lookups over MCP, audit log; memory to come) |
 | `mcp-servers/` | First-party Model Context Protocol servers |
-| `components/`  | A2UI component catalog the agent renders |
+| `components/`  | Planned Praxis components for the A2UI catalog |
 | `docs/`        | Architecture decisions and the roadmap |
 | `examples/`    | End-to-end demo flows |
 
 ## Quickstart (Phase 0 dev preview)
 
-> Not runnable yet. Setup instructions land with milestone **M0.5**. Watch this space.
+You need [Ollama](https://ollama.com), [uv](https://docs.astral.sh/uv/), Node 20+ with pnpm, and Rust with the [Tauri prerequisites](https://tauri.app/start/prerequisites/).
+
+```bash
+ollama pull qwen2.5:7b
+
+# Terminal 1 — model proxy
+cd agent && uv tool run --from 'litellm[proxy]==1.103.1' litellm   --config litellm_config.yaml --host 127.0.0.1 --port 4000
+
+# Terminal 2 — agent
+cd agent && uv sync
+uv run uvicorn praxis_agent.server:create_app --factory --host 127.0.0.1 --port 8000
+
+# Terminal 3 — Canvas
+cd canvas && pnpm install && pnpm tauri dev
+```
+
+Type an intent in the bar at the bottom — try "what is in my Documents folder?". The agent answers from a local model. It can look at the files in your home folder, hidden ones excepted, and cannot change any of them. Details: [`agent/README.md`](agent/README.md), [`canvas/README.md`](canvas/README.md).
 
 ## Architecture in one diagram
 
@@ -52,7 +68,7 @@ This repository is intentionally early. Star the repo to follow along.
 └─────────────────────────────────────────────────┘
 ```
 
-Detail: [`docs/architecture/ADR-001-strategic-positioning.md`](docs/architecture/ADR-001-strategic-positioning.md), [`docs/architecture/ADR-002-name-and-namespace.md`](docs/architecture/ADR-002-name-and-namespace.md)
+Detail: [`ADR-001` — strategic positioning](docs/architecture/ADR-001-strategic-positioning.md), [`ADR-002` — name and namespace](docs/architecture/ADR-002-name-and-namespace.md), [`ADR-003` — UI wire format](docs/architecture/ADR-003-ui-wire-format.md)
 
 ## Naming convention
 
