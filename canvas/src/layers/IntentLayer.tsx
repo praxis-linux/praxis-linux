@@ -1,12 +1,15 @@
 import { useState, type KeyboardEvent } from "react";
-import type { A2UIMode } from "../a2ui/types";
+import type { Mode } from "../agent/client";
+import type { CanvasState } from "../session";
 
 interface Props {
-  mode: A2UIMode;
+  mode: Mode;
+  call: CanvasState["call"];
+  busy: boolean;
   onIntent: (intent: string) => void;
 }
 
-export default function IntentLayer({ mode, onIntent }: Props) {
+export default function IntentLayer({ mode, call, busy, onIntent }: Props) {
   const [value, setValue] = useState("");
 
   function submit() {
@@ -27,10 +30,23 @@ export default function IntentLayer({ mode, onIntent }: Props) {
   return (
     <div className="intent-layer">
       <span className="mode-badge">{mode}</span>
+      {call && (
+        <span
+          className={`model-badge ${call.destination}`}
+          title={
+            call.destination === "cloud"
+              ? "This turn is sent to a cloud model"
+              : "This turn runs on a local model"
+          }
+        >
+          {call.destination === "cloud" ? "☁ " : ""}
+          {call.model}
+        </span>
+      )}
       <input
         className="intent-input"
         type="text"
-        placeholder="What do you want to do?"
+        placeholder={busy ? "Working…" : "What do you want to do?"}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={onKeyDown}
