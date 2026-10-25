@@ -16,6 +16,8 @@ Scaffolded at **M0.5**, connected to the agent at **M0.6**, conversational since
 - The context rail shows the conversation so far. Clicking a turn shows its screen again.
 - The conversation id is kept in `localStorage`, so a reload picks up where the conversation left off. "New" starts another conversation.
 - The welcome screen is rendered locally, so the Canvas opens without the agent.
+- Links and images in the agent's text are shown as text: a link as its words and address, an image as its description. Nothing the agent writes can load a remote resource or take the window elsewhere.
+- If the agent sends a screen the Canvas rejects, the previous screen stays and the rest of that reply is not drawn.
 
 The contract with the agent is specified in [ADR-003](../docs/architecture/ADR-003-ui-wire-format.md).
 
@@ -48,7 +50,7 @@ pnpm tauri dev     # desktop window
 pnpm dev           # or just the web UI at http://localhost:1420
 ```
 
-Set `VITE_PRAXIS_AGENT_URL` if the agent is not at `http://127.0.0.1:8000`. The Tauri CSP in `src-tauri/tauri.conf.json` names the agent address too.
+Set `VITE_PRAXIS_AGENT_URL` if the agent is not at `http://127.0.0.1:7729`. The Tauri CSP in `src-tauri/tauri.conf.json` names the agent address too.
 
 ## Checks
 

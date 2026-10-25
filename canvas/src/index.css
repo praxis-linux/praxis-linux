@@ -72,12 +72,19 @@ html, body, #root {
   opacity: 0.7;
 }
 
+.workspace-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
 .workspace-status {
-  min-height: 18px;
   font-size: 13px;
   color: var(--text-secondary);
 }
-.workspace-status:empty { display: none; }
+
+/* A link the agent wrote: shown with its address, never followed. */
+.agent-link { color: var(--accent); }
 
 .workspace-error {
   max-width: 640px;

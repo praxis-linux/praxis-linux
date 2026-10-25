@@ -7,7 +7,13 @@ import {
 import type { ReactComponentImplementation } from "@a2ui/react/v0_9";
 import { praxisCatalog } from "./a2ui/catalog";
 import { CONTEXT_SURFACE, WELCOME_MESSAGES, WORKSPACE_SURFACE } from "./a2ui/welcome";
-import { httpAgent, type AgentClient, type AgentEvent, type Mode } from "./agent/client";
+import {
+  AgentError,
+  httpAgent,
+  type AgentClient,
+  type AgentEvent,
+  type Mode,
+} from "./agent/client";
 
 export type Surface = SurfaceModel<ReactComponentImplementation>;
 
@@ -46,6 +52,10 @@ export class CanvasSession {
   private readonly listeners = new Set<() => void>();
   private turn: AbortController | undefined;
   private state: CanvasState = INITIAL_STATE;
+  // Per surface: the messages that drew what it shows now, and the last complete
+  // screen before that, to bring back if a new screen is rejected.
+  private readonly drawing = new Map<string, A2uiMessage[]>();
+  private readonly lastGood = new Map<string, A2uiMessage[]>();
 
   constructor(
     private readonly agent: AgentClient = httpAgent,
@@ -64,7 +74,7 @@ export class CanvasSession {
       this.syncSurfaces();
     });
     this.processor.onSurfaceDeleted(() => this.syncSurfaces());
-    this.apply(WELCOME_MESSAGES);
+    this.applyAll(WELCOME_MESSAGES);
     // Pick up where this conversation left off. Without the agent, the welcome
     // screen stays, and nothing is reported until the user asks for something.
     void this.run((signal) => this.agent.resume(this.conversation, signal), { quiet: true });
@@ -90,7 +100,7 @@ export class CanvasSession {
   newConversation() {
     this.turn?.abort();
     this.conversation = this.startConversation();
-    this.apply([
+    this.applyAll([
       { version: "v0.9", deleteSurface: { surfaceId: WORKSPACE_SURFACE } },
       { version: "v0.9", deleteSurface: { surfaceId: CONTEXT_SURFACE } },
       ...WELCOME_MESSAGES,
@@ -98,27 +108,36 @@ export class CanvasSession {
     this.set({ ...INITIAL_STATE, workspace: this.state.workspace, context: undefined });
   }
 
-  /** Runs one turn. A new turn supersedes the one in flight. */
+  /**
+   * Runs one turn. A new turn supersedes the one in flight.
+   *
+   * A `quiet` turn reports nothing that goes wrong: used to resume on start, when
+   * the user has not asked for anything yet.
+   */
   private async run(
     events: (signal: AbortSignal) => AsyncIterable<AgentEvent>,
     { quiet = false } = {},
   ): Promise<void> {
     this.turn?.abort();
     const turn = (this.turn = new AbortController());
-    this.set({ busy: true, status: null, error: null });
+    // The model badge describes this turn only; a turn that calls no model shows none.
+    this.set({ busy: true, status: null, error: null, call: null });
+    const progress: Turn = { quiet, rejected: false };
     try {
       for await (const event of events(turn.signal)) {
         if (turn.signal.aborted) return;
-        this.handle(event);
+        this.handle(event, progress);
       }
     } catch (error) {
       if (!turn.signal.aborted && !quiet) this.set({ error: describe(error) });
+      // Whatever ended the turn early, the agent should stop working on it.
+      turn.abort();
     } finally {
       if (this.turn === turn) this.set({ busy: false, status: null });
     }
   }
 
-  private handle(event: AgentEvent) {
+  private handle(event: AgentEvent, turn: Turn) {
     switch (event.type) {
       case "call":
         this.set({ call: { model: event.model, destination: event.destination } });
@@ -130,24 +149,57 @@ export class CanvasSession {
         this.set({ mode: event.mode });
         break;
       case "a2ui":
+        // After the first rejected message, the rest of this turn's screen is not drawn.
+        if (turn.rejected) break;
         // Once the reply is being drawn, what the agent was doing is over.
         if (this.state.status) this.set({ status: null });
-        this.apply([event.message]);
+        if (!this.apply(event.message)) {
+          turn.rejected = true;
+          if (!turn.quiet) this.set({ error: "The agent sent a screen the Canvas cannot show." });
+        }
         break;
       case "error":
-        this.set({ error: event.message });
+        if (!turn.quiet) this.set({ error: event.message });
         break;
     }
   }
 
-  private apply(messages: A2uiMessage[]) {
-    try {
-      this.processor.processMessages(messages);
-    } catch (error) {
-      // Later messages of a rejected screen fail too; the first failure is the cause.
-      if (this.state.error) return;
-      this.set({ error: `The agent sent UI the Canvas cannot show. ${describe(error)}` });
+  /**
+   * Applies one A2UI message. Returns false if the Canvas rejected it.
+   *
+   * A screen is drawn by deleting its surface, creating it again and filling it in.
+   * If the filling-in is rejected, the surface would be left empty; the screen it
+   * showed before is drawn again instead.
+   */
+  private apply(message: A2uiMessage): boolean {
+    const surfaceId = surfaceOf(message);
+    if ("deleteSurface" in message) {
+      const shown = this.drawing.get(surfaceId) ?? [];
+      if (shown.some((m) => "updateComponents" in m)) this.lastGood.set(surfaceId, shown);
+      this.drawing.set(surfaceId, []);
     }
+    try {
+      this.processor.processMessages([message]);
+    } catch {
+      const drawing = this.drawing.get(surfaceId) ?? [];
+      const previous = this.lastGood.get(surfaceId);
+      if (previous && !drawing.some((m) => "updateComponents" in m)) {
+        this.processor.processMessages([
+          { version: "v0.9", deleteSurface: { surfaceId } },
+          ...previous,
+        ]);
+        this.drawing.set(surfaceId, [...previous]);
+      }
+      return false;
+    }
+    if (!("deleteSurface" in message)) {
+      this.drawing.set(surfaceId, [...(this.drawing.get(surfaceId) ?? []), message]);
+    }
+    return true;
+  }
+
+  private applyAll(messages: A2uiMessage[]) {
+    for (const message of messages) this.apply(message);
   }
 
   private storedConversation(): string | null {
@@ -189,7 +241,20 @@ function browserStorage(): Storage | null {
   }
 }
 
+interface Turn {
+  quiet: boolean;
+  /** Set once the Canvas has rejected a message of this turn's screen. */
+  rejected: boolean;
+}
+
+function surfaceOf(message: A2uiMessage): string {
+  if ("deleteSurface" in message) return message.deleteSurface.surfaceId;
+  if ("createSurface" in message) return message.createSurface.surfaceId;
+  if ("updateComponents" in message) return message.updateComponents.surfaceId;
+  return message.updateDataModel.surfaceId;
+}
+
 function describe(error: unknown): string {
-  if (error instanceof TypeError) return "Could not reach the agent. Is it running?";
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof AgentError) return error.message;
+  return "Something went wrong while talking to the agent.";
 }

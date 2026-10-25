@@ -22,6 +22,8 @@ export default function IntentLayer({ mode, call, busy, onIntent, onNewConversat
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    // Enter that confirms a word in an input method (Chinese, Japanese, ...) is not a submit.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       submit();
@@ -54,6 +56,7 @@ export default function IntentLayer({ mode, call, busy, onIntent, onNewConversat
       <input
         className="intent-input"
         type="text"
+        aria-label="What do you want to do?"
         placeholder={busy ? "Working…" : "What do you want to do?"}
         value={value}
         onChange={(e) => setValue(e.target.value)}

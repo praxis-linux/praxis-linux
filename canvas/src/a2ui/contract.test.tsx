@@ -322,3 +322,178 @@ test("says what the agent is doing while it looks things up", async () => {
   expect(await screen.findByText("Plan a project")).toBeTruthy();
   await waitFor(() => expect(screen.getByRole("status").textContent).toBe(""));
 });
+
+// --- what the agent sends cannot reach outside the Canvas --------------------
+
+/** A turn whose screen is one body Text: the kind the model writes. */
+function textScreen(text: string) {
+  const [deleteSurface, createSurface] = GOLDEN;
+  return a2ui([
+    deleteSurface,
+    createSurface,
+    {
+      version: "v0.9",
+      updateComponents: {
+        surfaceId: "workspace",
+        components: [
+          { id: "root", component: "Column", children: ["title", "b0"] },
+          { id: "title", component: "Text", text: "Links", variant: "h2" },
+          { id: "b0", component: "Text", text, variant: "body" },
+        ],
+      },
+    },
+  ]);
+}
+
+test("links and images in the agent's text are shown, never followed or loaded", async () => {
+  agentAnswers(
+    textScreen(
+      "See [the docs](https://evil.example/login), <https://evil.example/x> " +
+        "and ![a chart](https://evil.example/t.png?d=secret).",
+    ),
+  );
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+
+  await submitIntent("hi");
+
+  await screen.findByText("Links");
+  await waitFor(() => expect(document.querySelector(".agent-link")).not.toBeNull());
+  expect(document.querySelector(".a2ui-host a")).toBeNull();
+  expect(document.querySelector(".a2ui-host img")).toBeNull();
+  const text = document.querySelector(".a2ui-host")?.textContent ?? "";
+  expect(text).toContain("the docs (https://evil.example/login)");
+  expect(text).toContain("[image: a chart]");
+});
+
+// --- what goes wrong, and what the user is told -------------------------------
+
+test("an event type this Canvas does not know is skipped", async () => {
+  agentAnswers([{ type: "progress", percent: 50 }, ...GOLDEN_TURN]);
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+
+  await submitIntent("plan a project");
+
+  expect(await screen.findByText("Plan a project")).toBeTruthy();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("an unreadable line ends the turn with a plain message and stops the request", async () => {
+  let signal: AbortSignal | undefined;
+  vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    if (new URL(url).pathname === "/resume") return ndjson([]);
+    signal = init.signal ?? undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(encoder.encode("Internal Server Error\n"));
+        // The stream stays open: only the Canvas can end this request.
+      },
+    });
+    return new Response(body);
+  });
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+
+  await submitIntent("hi");
+
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "The agent sent something the Canvas could not read.",
+  );
+  expect(signal?.aborted).toBe(true);
+  expect(screen.getByPlaceholderText("What do you want to do?")).toBeTruthy();
+});
+
+test("a connection lost mid-turn is not reported as an agent that is not running", async () => {
+  vi.stubGlobal("fetch", async (url: string) => {
+    if (new URL(url).pathname === "/resume") return ndjson([]);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            JSON.stringify({ type: "call", model: "local-fast", destination: "local" }) + "\n",
+          ),
+        );
+        setTimeout(() => controller.error(new TypeError("network error")), 10);
+      },
+    });
+    return new Response(body);
+  });
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+
+  await submitIntent("hi");
+
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "The connection to the agent was lost.",
+  );
+});
+
+test("a rejected screen leaves the previous one in place", async () => {
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+  await submitIntent("plan a project");
+  await screen.findByText("Plan a project");
+  const [deleteSurface, createSurface] = GOLDEN;
+  agentAnswers(
+    a2ui([
+      deleteSurface,
+      createSurface,
+      {
+        version: "v0.9",
+        updateComponents: {
+          surfaceId: "workspace",
+          components: [{ id: "root", component: "Image", url: "https://evil.example/x" }],
+        },
+      },
+      // Messages after the rejected one are not drawn either.
+      ...textScreen("drawn after the rejection").map((event) => event.message),
+    ]),
+  );
+
+  await submitIntent("again");
+
+  expect((await screen.findByRole("alert")).textContent).toContain("cannot show");
+  expect(screen.getByText("Plan a project")).toBeTruthy();
+  expect(screen.queryByText(/Loading/)).toBeNull();
+  expect(screen.queryByText("drawn after the rejection")).toBeNull();
+});
+
+test("the model badge is cleared by a turn that calls no model", async () => {
+  agentAnswers([{ type: "call", model: "cloud-strong", destination: "cloud" }, ...a2ui(GOLDEN)]);
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+  await submitIntent("hi");
+  await screen.findByText(/cloud-strong/);
+  // Opening a file is answered without a call event: no model was involved.
+  agentAnswers([{ type: "mode", mode: "file" }, ...a2ui(GOLDEN)]);
+
+  fireEvent.click(await screen.findByText("__init__.py"));
+
+  await waitFor(() => expect(screen.queryByText(/cloud-strong/)).toBeNull());
+});
+
+test("Enter that confirms an input-method composition does not send the intent", async () => {
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+  const input = screen.getByPlaceholderText("What do you want to do?");
+  fireEvent.change(input, { target: { value: "你好" } });
+
+  fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+  fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(sent).toEqual([]);
+});
+
+test("an error while resuming on start is not reported", async () => {
+  agentAnswers(GOLDEN_TURN, {
+    resume: [{ type: "error", message: "That part of the conversation is not stored." }],
+  });
+  render(<App />);
+
+  await waitFor(() => expect(resumes).toHaveLength(1));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(screen.queryByRole("alert")).toBeNull();
+});

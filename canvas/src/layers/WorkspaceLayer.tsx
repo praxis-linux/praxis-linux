@@ -13,9 +13,12 @@ interface Props {
 export default function WorkspaceLayer({ mode, surface, status, error }: Props) {
   return (
     <div className="workspace-layer">
-      <div className="workspace-mode">{mode}</div>
-      <div className="workspace-status" role="status">
-        {status}
+      <div className="workspace-head">
+        <span className="workspace-mode">{mode}</span>
+        {/* Always rendered, so screen readers announce each new status. */}
+        <span className="workspace-status" role="status">
+          {status}
+        </span>
       </div>
       {error && (
         <div className="workspace-error" role="alert">

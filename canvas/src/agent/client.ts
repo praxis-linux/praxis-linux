@@ -1,7 +1,7 @@
 import { A2uiMessageSchema, type ActionPayload } from "@a2ui/web_core/v0_9";
 import { z } from "zod";
 
-const AGENT_URL = import.meta.env.VITE_PRAXIS_AGENT_URL ?? "http://127.0.0.1:8000";
+const AGENT_URL = import.meta.env.VITE_PRAXIS_AGENT_URL ?? "http://127.0.0.1:7729";
 
 export const MODES = ["conversation", "file", "code"] as const;
 export type Mode = (typeof MODES)[number];
@@ -40,33 +40,77 @@ export const httpAgent: AgentClient = {
   },
 };
 
+/** Why a request to the agent failed, in words fit to show the user. */
+export class AgentError extends Error {}
+
+const EVENT_TYPES = new Set<string>(
+  AgentEventSchema.options.map((option) => option.shape.type.value),
+);
+
 async function* post(
   path: string,
   body: unknown,
   sessionId: string,
   signal: AbortSignal,
 ): AsyncGenerator<AgentEvent> {
-  const response = await fetch(AGENT_URL + path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Praxis-Session": sessionId },
-    body: JSON.stringify(body),
-    signal,
-  });
+  let response: Response;
+  try {
+    response = await fetch(AGENT_URL + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Praxis-Session": sessionId },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (error) {
+    if (signal.aborted) throw error;
+    throw new AgentError("Could not reach the agent. Is it running?");
+  }
   if (!response.ok || !response.body) {
-    throw new Error(`The agent answered with HTTP ${response.status}.`);
+    throw new AgentError(`The agent answered with HTTP ${response.status}.`);
   }
 
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-  let buffer = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += value;
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      if (line.trim()) yield AgentEventSchema.parse(JSON.parse(line));
+  try {
+    let buffer = "";
+    for (;;) {
+      let chunk: ReadableStreamReadResult<string>;
+      try {
+        chunk = await reader.read();
+      } catch (error) {
+        if (signal.aborted) throw error;
+        throw new AgentError("The connection to the agent was lost.");
+      }
+      if (chunk.done) break;
+      buffer += chunk.value;
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const event = parseEvent(line);
+        if (event) yield event;
+      }
     }
+    const event = parseEvent(buffer);
+    if (event) yield event;
+  } finally {
+    // Stops the agent's work too when the turn ends early: superseded, or unreadable.
+    void reader.cancel().catch(() => {});
   }
-  if (buffer.trim()) yield AgentEventSchema.parse(JSON.parse(buffer));
+}
+
+/** One line of the stream. Blank lines and event types this Canvas does not know are skipped. */
+function parseEvent(line: string): AgentEvent | null {
+  if (!line.trim()) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(line);
+  } catch {
+    throw new AgentError("The agent sent something the Canvas could not read.");
+  }
+  const type = (raw as { type?: unknown } | null)?.type;
+  if (typeof type === "string" && !EVENT_TYPES.has(type)) return null;
+  const event = AgentEventSchema.safeParse(raw);
+  if (!event.success) {
+    throw new AgentError("The agent sent something the Canvas could not read.");
+  }
+  return event.data;
 }

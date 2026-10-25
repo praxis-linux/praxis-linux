@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "typecheck": "tsc",
+    "typecheck": "tsc && tsc -p tsconfig.node.json",
     "test": "vitest run",
     "preview": "vite preview",
     "tauri": "tauri"
@@ -21,15 +21,11 @@
     "react-dom": "^19.0.0",
     "zod": "^3.25.76"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
-  },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
+    "@types/node": "^26.6.5",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4",
