@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import os
 import subprocess
 import time
@@ -50,8 +51,8 @@ def home(tmp_path):
 
 
 @pytest.fixture
-def files(home):
-    return Files([home])
+def files(home, tmp_path):
+    return Files([home], backups=tmp_path / "backups")
 
 
 def names(listing):
@@ -388,3 +389,176 @@ def test_very_large_images_are_not_read(files, home, monkeypatch):
 
     with pytest.raises(AccessError, match="too large"):
         files.read_image("big.png")
+
+
+# --- Writing ---
+
+
+def sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def test_a_whole_utf8_file_comes_with_the_hash_needed_to_change_it(files, home):
+    assert files.read_text_file("notes.txt").sha256 == sha(b"hello\nworld\n")
+
+
+def test_a_file_read_only_in_part_cannot_be_changed(files, home):
+    write(home / "long.txt", "a" * 100)
+
+    text = files.read_text_file("long.txt", max_bytes=10)
+
+    assert text.truncated
+    assert text.sha256 is None
+
+
+def test_a_file_that_is_not_utf8_cannot_be_changed(files, home):
+    (home / "latin1.txt").write_bytes("café".encode("latin-1"))
+
+    assert files.read_text_file("latin1.txt").sha256 is None
+
+
+def test_changing_a_file(files, home):
+    base = files.read_text_file("code/app.py").sha256
+
+    written = files.write_text_file("code/app.py", "print('bye')\n", base)
+
+    assert (home / "code" / "app.py").read_text(encoding="utf-8") == "print('bye')\n"
+    assert written.path == str(home / "code" / "app.py")
+    assert written.sha256 == sha(b"print('bye')\n")
+    assert written.size == 13
+    assert not written.created
+
+
+def test_a_file_changed_since_it_was_read_is_not_overwritten(files, home):
+    base = files.read_text_file("code/app.py").sha256
+    write(home / "code" / "app.py", "changed elsewhere")
+
+    with pytest.raises(AccessError, match="changed since it was opened"):
+        files.write_text_file("code/app.py", "mine", base)
+    assert (home / "code" / "app.py").read_text(encoding="utf-8") == "changed elsewhere"
+
+
+def test_creating_a_file(files, home):
+    written = files.write_text_file("code/new.py", "x = 2\n")
+
+    assert (home / "code" / "new.py").read_text(encoding="utf-8") == "x = 2\n"
+    assert written.created
+
+
+def test_creating_never_overwrites(files, home):
+    with pytest.raises(AccessError, match="already exists"):
+        files.write_text_file("notes.txt", "gone")
+    assert (home / "notes.txt").read_text(encoding="utf-8") == "hello\nworld\n"
+
+
+def test_creating_needs_the_folder_to_exist(files, home):
+    with pytest.raises(AccessError, match="no folder"):
+        files.write_text_file("nowhere/new.txt", "x")
+    assert not (home / "nowhere").exists()
+
+
+@pytest.mark.parametrize("path", [".env", ".ssh/config", "code/.git/hooks.py", "../outside/x.txt"])
+def test_writes_follow_the_same_rules_as_reads(files, home, path):
+    with pytest.raises(AccessError, match="hidden|outside"):
+        files.write_text_file(path, "x")
+    assert (home / ".env").read_text(encoding="utf-8") == "SECRET=1"
+
+
+def test_crlf_line_endings_are_kept(files, home):
+    (home / "dos.txt").write_bytes(b"one\r\ntwo\r\n")
+    base = files.read_text_file("dos.txt").sha256
+
+    files.write_text_file("dos.txt", "one\ntwo\nthree\n", base)
+
+    assert (home / "dos.txt").read_bytes() == b"one\r\ntwo\r\nthree\r\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="no executable bit on Windows")
+def test_an_executable_file_stays_executable(files, home):
+    script = write(home / "run.sh", "echo hi\n")
+    script.chmod(0o755)
+
+    files.write_text_file("run.sh", "echo bye\n", files.read_text_file("run.sh").sha256)
+
+    assert script.stat().st_mode & 0o777 == 0o755
+
+
+def test_too_much_text_is_not_written(files, home, monkeypatch):
+    monkeypatch.setattr(fs, "MAX_WRITE_BYTES", 5)
+
+    with pytest.raises(AccessError, match="too much"):
+        files.write_text_file("code/big.txt", "123456")
+
+
+def test_a_write_leaves_no_temporary_file_behind(files, home):
+    files.write_text_file("code/app.py", "x", files.read_text_file("code/app.py").sha256)
+
+    assert sorted(p.name for p in (home / "code").iterdir()) == [
+        ".git",
+        "app.py",
+        "deep",
+        "node_modules",
+    ]
+
+
+# --- Undoing ---
+
+
+def test_undoing_a_change_puts_the_file_back(files, home):
+    written = files.write_text_file(
+        "code/app.py", "print('bye')", files.read_text_file("code/app.py").sha256
+    )
+
+    undone = files.undo_write(written.backup)
+
+    assert (home / "code" / "app.py").read_text(encoding="utf-8") == "print('hi')"
+    assert undone.path == str(home / "code" / "app.py")
+    assert not undone.removed
+
+
+def test_undoing_a_creation_removes_the_file(files, home):
+    written = files.write_text_file("code/new.py", "x = 2\n")
+
+    assert files.undo_write(written.backup).removed
+    assert not (home / "code" / "new.py").exists()
+
+
+def test_a_change_is_undone_once(files, home):
+    written = files.write_text_file("code/new.py", "x = 2\n")
+    files.undo_write(written.backup)
+
+    with pytest.raises(AccessError, match="nothing|no change"):
+        files.undo_write(written.backup)
+
+
+def test_nothing_is_undone_over_a_later_change(files, home):
+    written = files.write_text_file(
+        "code/app.py", "mine", files.read_text_file("code/app.py").sha256
+    )
+    write(home / "code" / "app.py", "changed again")
+
+    with pytest.raises(AccessError, match="changed since"):
+        files.undo_write(written.backup)
+    assert (home / "code" / "app.py").read_text(encoding="utf-8") == "changed again"
+
+
+@pytest.mark.parametrize("backup", ["../../outside", "", "20260101T000000-zzzzzzzz", "x/y"])
+def test_an_undo_id_cannot_name_anything_else(files, backup):
+    with pytest.raises(AccessError, match="no change"):
+        files.undo_write(backup)
+
+
+def test_backups_are_kept_where_they_were_asked_to_be(files, home, tmp_path):
+    written = files.write_text_file(
+        "code/app.py", "mine", files.read_text_file("code/app.py").sha256
+    )
+
+    kept = tmp_path / "backups" / written.backup
+    assert (kept / "original").read_text(encoding="utf-8") == "print('hi')"
+
+
+def test_backups_default_to_the_praxis_folder(monkeypatch, tmp_path):
+    monkeypatch.delenv("PRAXIS_FS_BACKUPS", raising=False)
+    assert fs.backups_from_env() == Path.home() / ".praxis" / "backups"
+    monkeypatch.setenv("PRAXIS_FS_BACKUPS", str(tmp_path))
+    assert fs.backups_from_env() == tmp_path

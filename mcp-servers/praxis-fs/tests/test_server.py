@@ -23,22 +23,43 @@ def home(tmp_path):
 
 
 @pytest.fixture
-async def client(home):
-    async with Client(build_server(Files([home]))) as connected:
+async def client(home, tmp_path_factory):
+    files = Files([home], backups=tmp_path_factory.mktemp("backups"))
+    async with Client(build_server(files)) as connected:
         yield connected
 
 
-async def test_every_tool_is_declared_read_only(client):
-    tools = (await client.list_tools()).tools
+async def test_only_the_write_tools_are_declared_as_changing_anything(client):
+    tools = {tool.name: tool.annotations for tool in (await client.list_tools()).tools}
 
-    assert {tool.name for tool in tools} == {
-        "allowed_folders",
-        "list_directory",
-        "search_files",
-        "read_text_file",
-        "read_image",
-    }
-    assert all(tool.annotations.read_only_hint for tool in tools)
+    reads = {"allowed_folders", "list_directory", "search_files", "read_text_file", "read_image"}
+    writes = {"write_text_file", "undo_write"}
+    assert set(tools) == reads | writes
+    assert all(tools[name].read_only_hint for name in reads)
+    assert all(not tools[name].read_only_hint for name in writes)
+    assert all(tools[name].destructive_hint for name in writes)
+
+
+async def test_write_then_undo(client, home):
+    read = await client.call_tool("read_text_file", {"path": "docs/a.txt"})
+    base = read.structured_content["sha256"]
+
+    written = await client.call_tool(
+        "write_text_file", {"path": "docs/a.txt", "content": "beta", "expected_sha256": base}
+    )
+    assert not written.is_error
+    assert (home / "docs" / "a.txt").read_text(encoding="utf-8") == "beta"
+
+    undone = await client.call_tool("undo_write", {"backup": written.structured_content["backup"]})
+    assert undone.structured_content == {"path": str(home / "docs" / "a.txt"), "removed": False}
+    assert (home / "docs" / "a.txt").read_text(encoding="utf-8") == "alpha"
+
+
+async def test_a_write_to_a_hidden_file_is_refused(client):
+    result = await client.call_tool("write_text_file", {"path": ".bashrc", "content": "x"})
+
+    assert result.is_error
+    assert result.content[0].text.startswith("Error executing tool write_text_file: Refused: ")
 
 
 async def test_listing_comes_back_as_structured_content(client, home):

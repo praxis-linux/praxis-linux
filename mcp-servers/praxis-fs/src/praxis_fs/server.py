@@ -8,9 +8,23 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from .fs import AccessError, Files, FileText, ImageFile, Listing, Refused, roots_from_env
+from .fs import (
+    AccessError,
+    Files,
+    FileText,
+    ImageFile,
+    Listing,
+    Refused,
+    Undone,
+    Written,
+    backups_from_env,
+    roots_from_env,
+)
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+WRITES = ToolAnnotations(
+    read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=False
+)
 
 # How a caller tells "not allowed" from "not there": the error text starts with this.
 REFUSED = "Refused: "
@@ -31,7 +45,10 @@ def _refusals_reach_the_client() -> Iterator[None]:
 def build_server(files: Files) -> MCPServer:
     server = MCPServer(
         "praxis-fs",
-        instructions="Read-only access to the user's files. Nothing here can change a file.",
+        instructions=(
+            "Access to the user's files: reading, and writing text files. Write only what "
+            "the user has seen and agreed to; every write can be undone with undo_write."
+        ),
     )
 
     @server.tool(annotations=READ_ONLY)
@@ -71,11 +88,32 @@ def build_server(files: Files) -> MCPServer:
         with _refusals_reach_the_client():
             return files.read_image(path)
 
+    @server.tool(annotations=WRITES)
+    def write_text_file(path: str, content: str, expected_sha256: str | None = None) -> Written:
+        """Write a text file, keeping what it replaces.
+
+        To change a file, pass the sha256 read_text_file gave for it; the write is
+        refused if the file has changed since. Without it, only a new file is created.
+        The result's `backup` undoes the write with undo_write.
+        """
+        with _refusals_reach_the_client():
+            return files.write_text_file(path, content, expected_sha256)
+
+    @server.tool(annotations=WRITES)
+    def undo_write(backup: str) -> Undone:
+        """Put a file back as it was before a write, unless it has changed since."""
+        with _refusals_reach_the_client():
+            return files.undo_write(backup)
+
     return server
 
 
 def main() -> None:
-    files = Files(roots_from_env(), allow_hidden=os.environ.get("PRAXIS_FS_ALLOW_HIDDEN") == "1")
+    files = Files(
+        roots_from_env(),
+        allow_hidden=os.environ.get("PRAXIS_FS_ALLOW_HIDDEN") == "1",
+        backups=backups_from_env(),
+    )
     build_server(files).run("stdio")
 
 
