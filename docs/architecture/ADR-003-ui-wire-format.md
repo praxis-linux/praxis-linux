@@ -1,7 +1,7 @@
 # ADR-003: UI wire format, catalog, and the agent–Canvas contract
 
 **Status:** Accepted
-**Date:** 2026-09-30 (sections 8 and 9 and the second evidence table added the same day, with M0.8)
+**Date:** 2026-09-30 (sections 8 and 9 added the same day, with M0.8; sections 10 and 11 on 2026-10-25, with M0.9)
 **Decision-makers:** Founding contributor
 
 ## Context
@@ -47,28 +47,35 @@ The planner asks the provider for JSON constrained to the plan's schema (Pydanti
 | Endpoint | Body | Meaning |
 |---|---|---|
 | `POST /intent` | `{"intent": "..."}` | The user typed a request |
-| `POST /action` | An A2UI v0.9 client-to-server `action` message | The user clicked a card or submitted a form |
+| `POST /action` | An A2UI v0.9 client-to-server `action` message | The user clicked something on a surface (section 7) |
+| `POST /resume` | — | The Canvas opened: show where this conversation left off, or nothing if it is new |
 
-Both require an `X-Praxis-Session` header and answer with one JSON event per line:
+All require an `X-Praxis-Session` header, which names the conversation, and answer with one JSON event per line:
 
 | Event | Payload | When |
 |---|---|---|
 | `call` | `model`, `destination` (`local` or `cloud`) | Before the model is called, after the audit row is written |
-| `mode` | `mode` | Once the plan is known |
+| `status` | `text`, e.g. "Searching for *.py…" | Before each lookup runs |
+| `mode` | `mode` | With the first drawing of a screen, and whenever it changes |
 | `a2ui` | `message` — one A2UI server-to-client message | Once per message |
 | `error` | `message` | The turn failed |
 
-### 6. One surface per slot, replaced each turn
+### 6. Two surfaces: the workspace and the trail
 
-The agent addresses two surfaces: `workspace` and `context` (reserved for the context rail; nothing emits it yet). Each turn sends `deleteSurface`, `createSurface`, `updateComponents` and, when there is a form, `updateDataModel`. Deleting a surface that does not exist is a no-op, so the agent does not track what the Canvas is showing.
+`workspace` holds the screen for the current turn. `context`, shown in the context rail, holds the conversation trail: one row per turn, the one on screen marked.
 
-### 7. Three UI actions
+The first drawing of a screen replaces the surface (`deleteSurface`, `createSurface`, `updateComponents`, and `updateDataModel` when there is a form). Deleting a surface that does not exist is a no-op, so the agent does not track what the Canvas is showing. While a reply streams in (section 10), later drawings send only `updateComponents`, so the screen grows without flicker, unless that would leave a component unreachable from the root, which the Canvas rejects; then the surface is replaced again. The data model is re-sent only when it changes, so streaming never wipes what the user has typed into a form.
+
+Component ids are stable for that reason: the model's blocks are `b0`, `b1`, …, and what was looked up is `f0`, `f1`, …, so a listing keeps its id while the reply around it is still being written.
+
+### 7. Four UI actions
 
 | Action | Context | Agent treats it as |
 |---|---|---|
 | `intent` | `text` | A new request with that text |
 | `submit` | `purpose`, `values` (the form's data) | A request carrying the user's answers |
 | `open` | `target`, `kind` (`file` or `directory`) | A click on a file or folder: the agent calls the filesystem tool directly and shows the result. No model is called. |
+| `revisit` | `turn` | A click on a turn in the trail: the agent shows that turn's screen again as it was stored. No model and no tool is called. |
 
 Any other action name is rejected without calling a model.
 
@@ -87,6 +94,21 @@ Lookups have no optional fields. A small model fills every field it is offered: 
 A listing or a file's text goes on the screen straight from the tool result, placed after the model's answer. The model is asked for a sentence about it. The same holds for refusals: when the filesystem server refuses a lookup (a hidden file, a path outside the allowed folders), the screen says so in the agent's words.
 
 This is what makes file names and contents on the Canvas trustworthy with a model that is not: what the model *says* can still be wrong, and the evidence below shows it sometimes is.
+
+### 10. Replies are drawn while they are written
+
+The planner streams each model step with PydanticAI's `iter()`, parses the partial JSON as it arrives, and hands the agent a draft of the screen at most every 0.1 s once the step turns out to be a reply. `run_stream()` is not used: it cannot retry a reply that fails validation, and the planner relies on retries.
+
+A draft shows text and code as they grow. Cards and forms appear only once whole, because a half-written form would change its field names, and so its data bindings, as it streams. Lookups are never drawn from partial output; the agent waits for the whole step and sends a `status` event before running it.
+
+### 11. Conversations are stored on the machine
+
+Every finished turn is stored in SQLite (`~/.praxis/conversations.db`): what the user asked, the screen that was drawn, what was on it, and every message the model was sent and answered, lookups included.
+
+- **The model is shown the last ten turns**: the latest in full, so it can refer to what it just found; the earlier ones as the request and the final reply only, so file contents read in earlier turns are not sent again.
+- **What the user is looking at is added to the prompt.** When the screen shows a file or a folder, from a reply, a click or a revisited turn, the request goes to the model followed by "(On the user's screen right now: the file docs/plan.md.)". This is what lets "summarise this" work.
+- **The Canvas keeps the conversation id across reloads**, and asks `/resume` on start to show the last screen and the trail again. "New" starts another conversation; the old one stays stored.
+- Resuming and revisiting replay stored A2UI messages. Neither calls a model or a tool.
 
 ## Evidence
 
@@ -120,6 +142,21 @@ Thirty-six turns on `qwen2.5:7b` (twelve intents, three runs each) against a sam
 
 Nothing was changed in any run, because nothing can be: the server has no tool that writes. The model's claims about what it can do are the unreliable part, not the files it shows.
 
+### With streaming and memory (M0.9)
+
+Twelve scripted conversations on `qwen2.5:7b` (four scripts, three runs each: 24 model turns and 3 files opened by clicking), plus one run in a real browser against the production build:
+
+| | Result |
+|---|---|
+| Follow-ups that depend on an earlier turn ("how is that different…", "what was the first thing I asked?", "what does the first one do?", "what are the action items in it?") | 12 / 12 answered about the right thing |
+| "Summarise this" after opening a file by clicking | 3 / 3 read and summarised that file |
+| A follow-up after reloading the Canvas, in the browser | Answered from the conversation before the reload |
+| Time to the first drawing, model warm | 0.6–2.2 s; the whole reply 0.8–6 s |
+| Drawings per long reply | 13–41 |
+| Turns where the same folder was listed twice | 1 of 24, now shown once |
+
+The first request after the model has been idle is slow: 5.8 s to the first drawing in these runs, and 42 s when Ollama had to load the model after a restart.
+
 ## Consequences
 
 **Positive:**
@@ -129,7 +166,8 @@ Nothing was changed in any run, because nothing can be: the server has no tool t
 - The contract is tested from both sides: the agent's builders write a golden file, and the Canvas tests feed that file to the real renderer.
 
 **Negative / risks:**
-- **No token streaming.** A reply appears when the whole plan is ready. Streaming partial plans is possible later; it is not needed for the Phase 0 demo.
+- **Conversations hold whatever was read during them**, file contents included, in `~/.praxis/conversations.db`. It is on this machine and `praxis-fs` will not read it, but nothing deletes old conversations yet, and "New" does not either.
+- **"What is on screen" is a sentence added to the user's request.** It is how the model learns the context, and a small model may take it more or less literally than intended.
 - **Expressiveness is capped by the plan's four block types.** New UI means a new block type and a builder, by design.
 - **The A2UI packages are pre-1.0 and moving.** `@a2ui/web_core` 0.12 already exports a v1.0 protocol. Versions are pinned by the lockfile; upgrades go through the contract tests.
 - **`@a2ui/react` 0.12.0 ships its components without their CSS class names**, so the Canvas styles the rendered elements itself. Revisit when upstream fixes the build.

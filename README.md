@@ -24,7 +24,7 @@ This repository is intentionally early. Star the repo to follow along.
 | Directory      | Purpose |
 |----------------|---------|
 | `canvas/`      | Tauri 2 + React desktop application — the Canvas |
-| `agent/`       | Python agent runtime (router, planner, file lookups over MCP, audit log; memory to come) |
+| `agent/`       | Python agent runtime (router, planner, file lookups over MCP, conversation store, audit log) |
 | `mcp-servers/` | First-party Model Context Protocol servers |
 | `components/`  | Planned Praxis components for the A2UI catalog |
 | `docs/`        | Architecture decisions and the roadmap |

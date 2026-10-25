@@ -4,17 +4,18 @@ Praxis agent runtime. Python + FastAPI + PydanticAI.
 
 ## Status
 
-Stood up at milestone **M0.6**; reads the user's files through the `praxis-fs` MCP server since **M0.8**. Memory and per-turn routing are not built yet — see the [Roadmap](../docs/ROADMAP.md).
+Stood up at milestone **M0.6**; reads the user's files through the `praxis-fs` MCP server since **M0.8**; streams its replies and remembers conversations since **M0.9**. Per-turn routing and long-term memory are not built yet — see the [Roadmap](../docs/ROADMAP.md).
 
 ## What it does today
 
-1. Receives an intent (`POST /intent`) or a UI action (`POST /action`) from the Canvas.
+1. Receives an intent (`POST /intent`) or a UI action (`POST /action`) from the Canvas, and the conversation so far from its store.
 2. Picks a model alias and writes an audit row. If the row cannot be written, no model is called.
 3. Asks the model, through the LiteLLM proxy, for one **step** at a time. A step is either a file lookup or the reply: a mode, a title and a list of blocks (`text`, `code`, `cards`, `form`).
-4. Runs each lookup against `praxis-fs`, records it in the audit log, and gives the model the result. After three lookups the model has to reply.
-5. Puts what was looked up on the screen itself — the listing or the file's text straight from the tool, not the model's retelling — and compiles the screen into A2UI v0.9 messages, streamed back as NDJSON.
+4. Runs each lookup against `praxis-fs`, records it in the audit log, tells the Canvas what it is doing ("Searching for *.py…"), and gives the model the result. After three lookups the model has to reply.
+5. Draws the reply while the model writes it. What was looked up goes on the screen itself — the listing or the file's text straight from the tool, not the model's retelling. Everything reaches the Canvas as A2UI v0.9 messages, streamed as NDJSON.
+6. Stores the turn, and redraws the conversation trail in the Canvas's context rail.
 
-Clicking a file or folder in the Canvas sends an `open` action. That goes straight to `praxis-fs` and back; no model is called.
+Some clicks never reach a model: a file or folder (`open`) goes straight to `praxis-fs` and back, and a turn in the trail (`revisit`) brings back that turn's stored screen. `POST /resume` does the same for the last turn when the Canvas opens.
 
 The contract with the Canvas is specified in [ADR-003](../docs/architecture/ADR-003-ui-wire-format.md).
 
@@ -25,9 +26,10 @@ agent/
 ├── pyproject.toml
 ├── litellm_config.yaml       # Model aliases — see below
 ├── src/praxis_agent/
-│   ├── server.py             # FastAPI app: /intent, /action, /health
+│   ├── server.py             # FastAPI app: /intent, /action, /resume, /health
 │   ├── router.py             # Which alias serves a turn; local or cloud
-│   ├── planner.py            # The step loop: lookups, then the reply
+│   ├── planner.py            # The step loop: lookups, then the reply, streamed
+│   ├── memory.py             # Conversations: stored turns and what the model is shown
 │   ├── tools/
 │   │   └── files.py          # praxis-fs over MCP: the lookups and their results
 │   ├── ui/
@@ -37,8 +39,6 @@ agent/
 └── tests/
     └── golden/               # Builder output, also read by the Canvas tests
 ```
-
-Still to come: `memory/` (M0.9).
 
 ## Setup
 
@@ -76,6 +76,7 @@ curl -N -X POST http://127.0.0.1:8000/intent \
 | `PRAXIS_LITELLM_URL` | `http://127.0.0.1:4000` | Where the LiteLLM proxy listens |
 | `LITELLM_MASTER_KEY` | unset | Sent to the proxy as the API key, if the proxy requires one |
 | `PRAXIS_AUDIT_DB` | `~/.praxis/audit.db` | Audit log location |
+| `PRAXIS_CONVERSATIONS_DB` | `~/.praxis/conversations.db` | Conversation store location |
 | `PRAXIS_FS_ROOTS` | the home folder | Folders the agent may read — see [`praxis-fs`](../mcp-servers/praxis-fs/README.md) |
 | `PRAXIS_FS_COMMAND` | `python -m praxis_fs` | Command that starts the filesystem server |
 
@@ -84,6 +85,12 @@ curl -N -X POST http://127.0.0.1:8000/intent \
 What the model looks up is sent to the model that serves the turn. With a local alias nothing leaves the machine. With a cloud alias, the names and contents of the files it looks at go to that provider; the Canvas marks the turn as a cloud call and the audit log records it, but there is no per-file consent prompt yet (M0.12).
 
 `praxis-fs` refuses hidden files and anything outside the allowed folders. When it refuses, the Canvas says so in the agent's own words, because a small model's account of a refusal is often that the file does not exist.
+
+## Conversations
+
+Each finished turn is stored in the conversation store: the request, the screen that was drawn, and every message the model was sent and answered — **including the text of any file it read**. The store is on this machine, in `~/.praxis`, which `praxis-fs` will not read. Nothing deletes old conversations yet; "New" in the Canvas starts another one and keeps the old.
+
+The model is shown the last ten turns of a conversation: the latest in full, so it can refer to what it just found, and the earlier ones as request and reply only. When the screen shows a file or folder, the request goes to the model with a note saying which, so "summarise this" works.
 
 ## LiteLLM proxy
 
@@ -95,7 +102,7 @@ An alias counts as local only if its name starts with `local-`. Anything else is
 
 Two tables in the audit database, each row written before the call it records:
 
-- `model_calls`: when, which session, which alias, local or cloud, what triggered it, how many characters were sent, how many requests it took, how it ended and how long it took. Prompt text is not stored.
+- `model_calls`: when, which session, which alias, local or cloud, what triggered it, how many characters were sent, how many requests it took, how it ended and how long it took. Prompt text is not in the audit log; it is in the conversation store.
 - `tool_calls`: when, which session, which tool, with what arguments, whether the model or the user asked for it, and how it ended.
 
 ```bash
@@ -109,4 +116,4 @@ uv run pytest
 uv run ruff check . && uv run ruff format --check .
 ```
 
-The tests never call a real model; they do start a real `praxis-fs`. After changing `ui/a2ui.py`, regenerate the golden file with `UPDATE_GOLDEN=1 uv run pytest` and run the Canvas tests, which read it.
+The tests never call a real model; they do start a real `praxis-fs`. After changing `ui/a2ui.py`, regenerate the golden files with `UPDATE_GOLDEN=1 uv run pytest` and run the Canvas tests, which read it.
