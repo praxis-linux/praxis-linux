@@ -174,10 +174,7 @@ def describe(result: Listing | FileText, main_folder: str) -> str:
     """
 
     def short(path: str) -> str:
-        try:
-            return Path(path).relative_to(main_folder).as_posix()
-        except ValueError:
-            return path
+        return relative(path, main_folder)
 
     if isinstance(result, FileText):
         shown = result.content[:MODEL_FILE_CHARS]
@@ -202,6 +199,15 @@ def describe(result: Listing | FileText, main_folder: str) -> str:
         # So the model does not tell the user a hidden file does not exist.
         return f"{head}. Files and folders whose names start with a dot are usually left out."
     return "\n".join([f"{head}:", *lines])
+
+
+def relative(path: str, main_folder: str) -> str:
+    """`path` as the model is told to write paths: relative to the main folder."""
+    try:
+        below = Path(path).relative_to(main_folder).as_posix()
+    except ValueError:
+        return path
+    return "the main folder" if below == "." else below
 
 
 def human_size(size: int | None) -> str:

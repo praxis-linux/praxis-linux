@@ -7,13 +7,14 @@ from fastapi.testclient import TestClient
 from mcp import Client
 from praxis_fs.fs import Files
 from praxis_fs.server import build_server
-from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models.function import FunctionModel
 
+from praxis_agent import planner
 from praxis_agent.audit import AuditLog
-from praxis_agent.server import create_app
+from praxis_agent.memory import Conversations
+from praxis_agent.server import _Workspace, create_app
 from praxis_agent.tools.files import FileTools
-from praxis_agent.ui import Screen, build_messages
+from praxis_agent.ui.plan import Screen, TextBlock
 from sample_plan import SAMPLE_REPLY
 
 SESSION = {"X-Praxis-Session": "test-session"}
@@ -30,10 +31,10 @@ def text(content):
 
 
 class FakeModel:
-    """Stands in for the LiteLLM proxy: records prompts, answers from a script.
+    """Stands in for the LiteLLM proxy: records prompts, streams answers from a script.
 
     Each entry of `script` is one model step; when it runs out, the model replies
-    with SAMPLE_REPLY.
+    with SAMPLE_REPLY. Answers arrive a few characters at a time, as a real model's do.
     """
 
     def __init__(self):
@@ -44,17 +45,24 @@ class FakeModel:
 
     def for_alias(self, alias):
         self.aliases.append(alias)
-        return FunctionModel(self._respond)
+        return FunctionModel(stream_function=self._stream)
 
-    def _respond(self, messages, info):
+    async def _stream(self, messages, info):
         if self.fail:
             raise RuntimeError("proxy unreachable")
         self.requests.append(messages)
-        step = self.script.pop(0) if self.script else REPLY
-        return ModelResponse(parts=[TextPart(json.dumps(step))])
+        answer = json.dumps(self.script.pop(0) if self.script else REPLY)
+        for i in range(0, len(answer), 9):
+            yield answer[i : i + 9]
 
     def prompt(self, index=-1):
         return self.requests[index][-1].parts[-1].content
+
+
+@pytest.fixture(autouse=True)
+def every_draft_is_drawn(monkeypatch):
+    # The fake model answers faster than a person could watch; draw every draft anyway.
+    monkeypatch.setattr(planner, "DRAFT_INTERVAL", 0)
 
 
 @pytest.fixture
@@ -78,14 +86,34 @@ def audit(tmp_path):
 
 
 @pytest.fixture
-def client(audit, model, home):
+def memory(tmp_path):
+    return Conversations(tmp_path / "conversations.db")
+
+
+@pytest.fixture
+def make_client(audit, memory, model, home):
+    """A client for a fresh agent process that shares the databases of the others."""
+
     @asynccontextmanager
     async def in_process_praxis_fs():
         async with Client(build_server(Files([home]))) as mcp_client:
             yield await FileTools.connect(mcp_client)
 
-    app = create_app(audit=audit, model_for=model.for_alias, connect_files=in_process_praxis_fs)
-    with TestClient(app) as test_client:
+    def make():
+        app = create_app(
+            audit=audit,
+            conversations=Conversations(memory.path),
+            model_for=model.for_alias,
+            connect_files=in_process_praxis_fs,
+        )
+        return TestClient(app)
+
+    return make
+
+
+@pytest.fixture
+def client(make_client):
+    with make_client() as test_client:
         yield test_client
 
 
@@ -93,13 +121,65 @@ def events(response):
     return [json.loads(line) for line in response.text.splitlines()]
 
 
-def components(response):
-    (update,) = [
-        e["message"]["updateComponents"]
-        for e in events(response)
-        if e["type"] == "a2ui" and "updateComponents" in e["message"]
-    ]
-    return {c["id"]: c for c in update["components"]}
+def modes(response):
+    return [e["mode"] for e in events(response) if e["type"] == "mode"]
+
+
+def statuses(response):
+    return [e["text"] for e in events(response) if e["type"] == "status"]
+
+
+def a2ui(response):
+    return [e["message"] for e in events(response) if e["type"] == "a2ui"]
+
+
+def surface_of(message):
+    (body,) = [value for key, value in message.items() if key != "version"]
+    return body["surfaceId"]
+
+
+def surfaces(response):
+    """Replays a response's A2UI messages the way the Canvas does.
+
+    Fails the moment a message would leave a component that cannot be reached from
+    the root, which the Canvas rejects. Returns each surface's components by id.
+    """
+    state = {}
+    for message in a2ui(response):
+        if "deleteSurface" in message:
+            state.pop(message["deleteSurface"]["surfaceId"], None)
+        elif "createSurface" in message:
+            state[message["createSurface"]["surfaceId"]] = {"components": {}, "data": {}}
+        elif "updateComponents" in message:
+            update = message["updateComponents"]
+            components = state[update["surfaceId"]]["components"]  # KeyError: never created
+            components.update({c["id"]: c for c in update["components"]})
+            assert reachable(components) == set(components), "an orphaned component"
+        elif "updateDataModel" in message:
+            state[message["updateDataModel"]["surfaceId"]]["data"] = message["updateDataModel"][
+                "value"
+            ]
+    return state
+
+
+def reachable(components):
+    seen, queue = set(), ["root"]
+    while queue:
+        current = queue.pop()
+        seen.add(current)
+        component = components[current]
+        queue.extend(component.get("children", []))
+        if "child" in component:
+            queue.append(component["child"])
+    return seen
+
+
+def workspace(response):
+    return surfaces(response)["workspace"]["components"]
+
+
+def trail(response):
+    return surfaces(response)["context"]["components"]
 
 
 def rows(audit, table):
@@ -121,23 +201,59 @@ def action(name, context):
     }
 
 
+def ask(client, intent, session=SESSION):
+    return client.post("/intent", json={"intent": intent}, headers=session)
+
+
 # --- a plain turn ----------------------------------------------------------
 
 
-def test_intent_streams_call_then_mode_then_a2ui(client):
-    response = client.post("/intent", json={"intent": "plan a project"}, headers=SESSION)
+def test_a_turn_streams_its_call_then_draws_the_reply(client):
+    response = ask(client, "plan a project")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/x-ndjson")
     got = events(response)
     assert got[0] == {"type": "call", "model": "local-fast", "destination": "local"}
     assert got[1] == {"type": "mode", "mode": "conversation"}
-    expected = Screen(mode="conversation", title="Plan a project", blocks=SAMPLE_REPLY.blocks)
-    assert [e["message"] for e in got[2:]] == build_messages(expected)
+    shown = workspace(response)
+    assert shown["title"]["text"] == "Plan a project"
+    assert shown["root"]["children"] == ["title", "b0", "b1", "b2", "b3"]
+    assert shown["b3"]["text"] == '```python\nprint("hello")\nprint("world")\n```'
+
+
+def test_the_reply_is_drawn_as_it_is_written_without_being_redrawn_from_scratch(client):
+    response = ask(client, "plan a project")
+
+    on_workspace = [m for m in a2ui(response) if surface_of(m) == "workspace"]
+    replaced = [m for m in on_workspace if "deleteSurface" in m]
+    drawn = [m for m in on_workspace if "updateComponents" in m]
+    assert len(replaced) == 1
+    assert len(drawn) > 10
+    # The opening text was shown growing before the reply was complete.
+    first_texts = [
+        c["text"] for m in drawn for c in m["updateComponents"]["components"] if c["id"] == "b0"
+    ]
+    assert first_texts[0] != first_texts[-1]
+    assert first_texts[-1] == "Tell me about the **project**."
+
+
+def test_a_form_is_shown_only_when_whole_and_its_data_model_is_sent_once(client):
+    response = ask(client, "plan a project")
+
+    drawn = [m["updateComponents"]["components"] for m in a2ui(response) if "updateComponents" in m]
+    form_fields = [
+        sorted(c["id"] for c in components if c["id"].startswith("b1_f_"))
+        for components in drawn
+        if any(c["id"] == "b1" for c in components)
+    ]
+    assert form_fields and all(f == ["b1_f_goal", "b1_f_project_name"] for f in form_fields)
+    data_models = [m for m in a2ui(response) if "updateDataModel" in m]
+    assert len(data_models) == 1
 
 
 def test_every_model_call_is_audited(client, audit):
-    client.post("/intent", json={"intent": "plan a project"}, headers=SESSION)
+    ask(client, "plan a project")
 
     (row,) = rows(audit, "model_calls")
     assert row["session_id"] == "test-session"
@@ -152,7 +268,7 @@ def test_every_model_call_is_audited(client, audit):
 def test_cloud_alias_is_reported_and_audited_as_cloud(client, audit, model, monkeypatch):
     monkeypatch.setenv("PRAXIS_MODEL", "cloud-strong")
 
-    got = events(client.post("/intent", json={"intent": "hi"}, headers=SESSION))
+    got = events(ask(client, "hi"))
 
     assert got[0] == {"type": "call", "model": "cloud-strong", "destination": "cloud"}
     assert model.aliases == ["cloud-strong"]
@@ -165,27 +281,28 @@ def test_no_model_call_when_the_audit_log_cannot_be_written(client, audit, model
 
     monkeypatch.setattr(audit, "begin", broken)
 
-    got = events(client.post("/intent", json={"intent": "hi"}, headers=SESSION))
+    got = events(ask(client, "hi"))
 
     assert [e["type"] for e in got] == ["error"]
     assert model.requests == []
 
 
-def test_model_failure_is_reported_and_audited(client, audit, model):
+def test_model_failure_is_reported_and_audited(client, audit, model, memory):
     model.fail = True
 
-    got = events(client.post("/intent", json={"intent": "hi"}, headers=SESSION))
+    got = events(ask(client, "hi"))
 
     assert [e["type"] for e in got] == ["call", "error"]
     (row,) = rows(audit, "model_calls")
     assert row["status"] == "error"
     assert "proxy unreachable" in row["error"]
+    assert memory.turns("test-session") == []
 
 
 def test_the_model_sees_paths_relative_to_the_main_folder(client, model, home):
     model.script = [{"step": {"do": "search_files", "pattern": "*.md"}}]
 
-    client.post("/intent", json={"intent": "my markdown files"}, headers=SESSION)
+    ask(client, "my markdown files")
 
     assert "1 files matching '*.md' under the main folder:\ndocs/plan.md (" in model.prompt()
     assert str(home) not in model.prompt()
@@ -195,12 +312,28 @@ def test_the_model_sees_paths_relative_to_the_main_folder(client, model, home):
 def test_a_screen_that_shows_files_is_in_file_mode(client, model):
     model.script = [{"step": {"do": "list_directory"}}]  # then SAMPLE_REPLY, a conversation
 
-    got = events(client.post("/intent", json={"intent": "my files"}, headers=SESSION))
-
-    assert got[1] == {"type": "mode", "mode": "file"}
+    assert modes(ask(client, "my files")) == ["file"]
 
 
 # --- lookups the model asks for --------------------------------------------
+
+
+def test_each_lookup_is_announced_before_it_runs(client, model):
+    model.script = [
+        {"step": {"do": "search_files", "pattern": "*.md", "directory": "docs"}},
+        {"step": {"do": "recent_files", "days": 7}},
+        {"step": {"do": "list_directory", "path": ""}},
+    ]
+
+    response = ask(client, "what changed?")
+
+    assert statuses(response) == [
+        "Searching for *.md in docs…",
+        "Looking for files changed in the last 7 days…",
+        "Opening your main folder…",
+    ]
+    kinds = [e["type"] for e in events(response)]
+    assert kinds.index("status") < kinds.index("a2ui")
 
 
 def test_a_lookup_is_run_shown_and_fed_back_to_the_model(client, model, home):
@@ -209,16 +342,16 @@ def test_a_lookup_is_run_shown_and_fed_back_to_the_model(client, model, home):
         reply(text("One Python file changed this week.")),
     ]
 
-    response = client.post("/intent", json={"intent": "python files this week"}, headers=SESSION)
+    response = ask(client, "python files this week")
 
     # The model saw the real result before replying.
     assert "Result of recent_files:" in model.prompt()
     assert "app.py (12 bytes, modified " in model.prompt()
     # The Canvas shows the real result, not the model's account of it.
-    shown = components(response)
-    assert shown["root"]["children"] == ["title", "b0", "b1"]
-    assert shown["b1_e0_name"]["text"] == "app.py"
-    assert shown["b1_e0"]["action"]["event"]["context"]["target"] == str(home / "app.py")
+    shown = workspace(response)
+    assert shown["root"]["children"] == ["title", "b0", "f0"]
+    assert shown["f0_e0_name"]["text"] == "app.py"
+    assert shown["f0_e0"]["action"]["event"]["context"]["target"] == str(home / "app.py")
 
 
 def test_what_was_looked_up_goes_after_the_answer_and_before_the_cards(client, model):
@@ -228,17 +361,17 @@ def test_what_was_looked_up_goes_after_the_answer_and_before_the_cards(client, m
         reply(text("Here is your main folder."), cards),
     ]
 
-    shown = components(client.post("/intent", json={"intent": "my files"}, headers=SESSION))
+    shown = workspace(ask(client, "my files"))
 
-    assert shown["b0"]["component"] == "Text"
-    assert shown["b1_head"]["text"].endswith("2 items")  # app.py and docs; .env is hidden
-    assert shown["b2_c0"]["component"] == "Button"
+    assert shown["root"]["children"] == ["title", "b0", "f0", "b1"]
+    assert shown["f0_head"]["text"].endswith("2 items")  # app.py and docs; .env is hidden
+    assert shown["b1_c0"]["component"] == "Button"
 
 
 def test_lookups_are_audited_as_asked_by_the_model(client, model, audit):
     model.script = [{"step": {"do": "read_text_file", "path": "app.py"}}]
 
-    client.post("/intent", json={"intent": "what is in app.py"}, headers=SESSION)
+    ask(client, "what is in app.py")
 
     (row,) = rows(audit, "tool_calls")
     assert row["tool"] == "read_text_file"
@@ -257,7 +390,7 @@ def test_the_audit_log_records_the_tool_call_actually_made(client, model, audit,
         {"step": {"do": "search_files", "pattern": "old"}},
     ]
 
-    client.post("/intent", json={"intent": "anything new?"}, headers=SESSION)
+    ask(client, "anything new?")
 
     recent, search = rows(audit, "tool_calls")
     assert recent["tool"] == search["tool"] == "search_files"
@@ -272,21 +405,35 @@ def test_the_audit_log_records_the_tool_call_actually_made(client, model, audit,
 def test_a_search_that_finds_nothing_is_not_shown_and_the_model_is_told_why(client, model):
     model.script = [{"step": {"do": "search_files", "pattern": ".env"}}]
 
-    response = client.post("/intent", json={"intent": "find my .env"}, headers=SESSION)
+    response = ask(client, "find my .env")
 
     assert "0 files matching '.env' under the main folder." in model.prompt()
     assert "names start with a dot are usually left out" in model.prompt()
-    assert not any(key.endswith("_head") for key in components(response))
-    assert events(response)[1] == {"type": "mode", "mode": "conversation"}
+    assert not any(key.startswith("f") for key in workspace(response))
+    assert modes(response) == ["conversation"]
+
+
+def test_what_is_looked_up_twice_is_shown_once(client, model):
+    model.script = [
+        {"step": {"do": "list_directory", "path": "docs"}},
+        {"step": {"do": "read_text_file", "path": "app.py"}},
+        {"step": {"do": "list_directory", "path": "docs"}},
+    ]
+
+    shown = workspace(ask(client, "show me docs"))
+
+    assert [c for c in shown["root"]["children"] if c.startswith("f")] == ["f0", "f1"]
+    assert shown["f0_head"]["text"].endswith("docs · 1 item")
+    assert "f1_text" in shown
 
 
 def test_an_empty_folder_is_still_shown(client, model, home):
     (home / "empty").mkdir()
     model.script = [{"step": {"do": "list_directory", "path": "empty"}}]
 
-    shown = components(client.post("/intent", json={"intent": "open empty"}, headers=SESSION))
+    shown = workspace(ask(client, "open empty"))
 
-    assert shown["b1_head"]["text"].endswith("0 items")
+    assert shown["f0_head"]["text"].endswith("0 items")
 
 
 def test_a_refusal_is_stated_to_the_user_whatever_the_model_says(client, model, audit):
@@ -295,11 +442,11 @@ def test_a_refusal_is_stated_to_the_user_whatever_the_model_says(client, model, 
         reply(text("There is no .env file."), mode="conversation"),  # what a small model says
     ]
 
-    response = client.post("/intent", json={"intent": "show my .env"}, headers=SESSION)
+    response = ask(client, "show my .env")
 
     assert "read_text_file was refused:" in model.prompt() and "hidden" in model.prompt()
     assert "SECRET" not in response.text
-    shown = components(response)
+    shown = workspace(response)
     assert shown["root"]["children"] == ["title", "b0", "b1"]
     assert shown["b1"] == {
         "id": "b1",
@@ -318,23 +465,23 @@ def test_a_lookup_that_merely_fails_is_not_announced(client, model):
         reply(text("Found it.")),
     ]
 
-    response = client.post("/intent", json={"intent": "read my plan"}, headers=SESSION)
+    response = ask(client, "read my plan")
 
     assert (
         "read_text_file failed: There is no file at docs/missing.md."
         in model.requests[1][-1].parts[-1].content
     )
     assert "Not read" not in response.text
-    assert components(response)["b1_e0_name"]["text"] == "docs/plan.md"
+    assert workspace(response)["f0_e0_name"]["text"] == "docs/plan.md"
 
 
 def test_the_model_must_reply_after_three_lookups(client, model):
     model.script = [{"step": {"do": "list_directory"}}] * 3
 
-    response = client.post("/intent", json={"intent": "loop"}, headers=SESSION)
+    response = ask(client, "loop")
 
     assert len(model.requests) == 4
-    assert components(response)["title"]["text"] == SAMPLE_REPLY.title
+    assert workspace(response)["title"]["text"] == SAMPLE_REPLY.title
 
 
 def test_no_file_is_read_when_the_audit_log_cannot_be_written(client, model, audit, monkeypatch):
@@ -344,10 +491,29 @@ def test_no_file_is_read_when_the_audit_log_cannot_be_written(client, model, aud
     monkeypatch.setattr(audit, "begin_tool", broken)
     model.script = [{"step": {"do": "read_text_file", "path": "app.py"}}]
 
-    response = client.post("/intent", json={"intent": "read app.py"}, headers=SESSION)
+    response = ask(client, "read app.py")
 
     assert "audit log is unavailable" in model.prompt()
     assert "print('hi')" not in response.text
+
+
+# --- drawing in place ------------------------------------------------------
+
+
+def test_a_screen_with_fewer_parts_than_the_last_replaces_it():
+    canvas = _Workspace()
+    longer = Screen(
+        mode="conversation",
+        title="t",
+        blocks=[TextBlock(kind="text", text="a"), TextBlock(kind="text", text="b")],
+    )
+    shorter = Screen(mode="conversation", title="t", blocks=[TextBlock(kind="text", text="a")])
+
+    first, grown, shrunk = canvas.draw(shorter), canvas.draw(longer), canvas.draw(shorter)
+
+    assert '"deleteSurface"' in first[1]
+    assert not any('"deleteSurface"' in line for line in grown)
+    assert '"deleteSurface"' in shrunk[0]
 
 
 # --- browsing by clicking --------------------------------------------------
@@ -360,11 +526,10 @@ def test_opening_a_folder_lists_it_without_calling_a_model(client, model, audit,
         headers=SESSION,
     )
 
-    got = events(response)
-    assert got[0] == {"type": "mode", "mode": "file"}
-    shown = components(response)
+    assert events(response)[0] == {"type": "mode", "mode": "file"}
+    shown = workspace(response)
     assert shown["title"]["text"] == "docs"
-    assert shown["b0_e0_name"]["text"] == "plan.md"
+    assert shown["f0_e0_name"]["text"] == "plan.md"
     assert shown["up"]["action"]["event"]["context"] == {"target": str(home), "kind": "directory"}
     assert model.requests == []
     assert rows(audit, "model_calls") == []
@@ -377,7 +542,7 @@ def test_the_top_folder_offers_no_way_up(client, home):
         "/action", json=action("open", {"target": str(home), "kind": "directory"}), headers=SESSION
     )
 
-    assert "up" not in components(response)
+    assert "up" not in workspace(response)
 
 
 def test_opening_a_file_shows_its_text(client, model, home):
@@ -387,9 +552,9 @@ def test_opening_a_file_shows_its_text(client, model, home):
         headers=SESSION,
     )
 
-    shown = components(response)
+    shown = workspace(response)
     assert shown["title"]["text"] == "app.py"
-    assert shown["b0_text"]["text"] == "```py\nprint('hi')\n\n```"
+    assert shown["f0_text"]["text"] == "```py\nprint('hi')\n\n```"
     assert model.requests == []
 
 
@@ -420,6 +585,146 @@ def test_a_malformed_open_action_is_rejected(client, audit, context):
 
     assert response.status_code == 400
     assert rows(audit, "tool_calls") == []
+
+
+# --- what the user is looking at ---------------------------------------------
+
+
+def test_the_model_is_told_which_file_the_user_opened(client, model, home):
+    client.post(
+        "/action",
+        json=action("open", {"target": str(home / "docs" / "plan.md"), "kind": "file"}),
+        headers=SESSION,
+    )
+
+    ask(client, "summarise this")
+
+    assert model.prompt(0) == (
+        "summarise this\n\n(On the user's screen right now: the file docs/plan.md.)"
+    )
+
+
+def test_the_model_is_told_which_folder_a_reply_showed(client, model):
+    model.script = [{"step": {"do": "list_directory", "path": "docs"}}]
+    ask(client, "open docs")
+
+    ask(client, "what is the newest one?")
+
+    assert model.prompt().endswith("(On the user's screen right now: the folder docs.)")
+
+
+def test_after_a_reply_without_files_nothing_is_said_to_be_on_screen(client, model, home):
+    client.post(
+        "/action",
+        json=action("open", {"target": str(home / "app.py"), "kind": "file"}),
+        headers=SESSION,
+    )
+    ask(client, "what is a symlink?")
+
+    ask(client, "and a hard link?")
+
+    assert model.prompt() == "and a hard link?"
+    assert model.prompt(0).startswith("what is a symlink?\n\n(On the user's screen")
+
+
+# --- the conversation ------------------------------------------------------
+
+
+def test_each_turn_is_added_to_the_trail(client, model):
+    ask(client, "first question")
+    response = ask(client, "second question")
+
+    shown = trail(response)
+    assert shown["root"]["children"] == ["trail_head", "t1", "t2"]
+    assert shown["t1_label"]["text"] == "first question"
+    assert shown["t2_label"]["text"] == "▸ second question"
+    assert shown["t2_title"]["text"] == SAMPLE_REPLY.title
+    assert shown["t1"]["action"]["event"] == {"name": "revisit", "context": {"turn": 1}}
+
+
+def test_the_trail_names_a_form_by_its_purpose_and_cuts_long_requests(client):
+    client.post(
+        "/action",
+        json=action("submit", {"purpose": "Gather project details", "values": {}}),
+        headers=SESSION,
+    )
+    response = ask(client, "x" * 200)
+
+    shown = trail(response)
+    assert shown["t1_label"]["text"] == "Form: Gather project details"
+    assert len(shown["t2_label"]["text"]) == len("▸ ") + 80
+    assert shown["t2_label"]["text"].endswith("…")
+
+
+def test_revisiting_a_turn_shows_its_screen_again_without_a_model(client, model, audit):
+    model.script = [{"step": {"do": "list_directory", "path": "docs"}}]
+    ask(client, "open docs")
+    ask(client, "something else")
+    calls = len(model.requests), len(rows(audit, "tool_calls"))
+
+    response = client.post("/action", json=action("revisit", {"turn": 1}), headers=SESSION)
+
+    assert modes(response) == ["file"]
+    assert workspace(response)["f0_e0_name"]["text"] == "plan.md"
+    assert trail(response)["t1_label"]["text"] == "▸ open docs"
+    assert (len(model.requests), len(rows(audit, "tool_calls"))) == calls
+
+
+def test_a_revisited_file_is_what_the_model_is_told_is_on_screen(client, model):
+    model.script = [{"step": {"do": "read_text_file", "path": "app.py"}}]
+    ask(client, "show app.py")
+    ask(client, "what is a symlink?")
+    client.post("/action", json=action("revisit", {"turn": 1}), headers=SESSION)
+
+    ask(client, "explain it")
+
+    assert model.prompt().endswith("(On the user's screen right now: the file app.py.)")
+
+
+@pytest.mark.parametrize("context", [{}, {"turn": "1"}, {"turn": 0}, {"turn": True}])
+def test_a_malformed_revisit_is_rejected(client, context):
+    response = client.post("/action", json=action("revisit", context), headers=SESSION)
+
+    assert response.status_code == 400
+
+
+def test_revisiting_a_turn_that_does_not_exist_is_an_error_event(client):
+    response = client.post("/action", json=action("revisit", {"turn": 7}), headers=SESSION)
+
+    (event,) = events(response)
+    assert event["type"] == "error"
+
+
+def test_a_conversation_outlives_the_agent(make_client, model):
+    with make_client() as first:
+        ask(first, "first question")
+
+    with make_client() as second:
+        resumed = second.post("/resume", headers=SESSION)
+        ask(second, "second question")
+
+    assert modes(resumed) == ["conversation"]
+    assert workspace(resumed)["title"]["text"] == SAMPLE_REPLY.title
+    assert trail(resumed)["t1_label"]["text"] == "▸ first question"
+    # The restarted agent sent the model the earlier turn.
+    assert model.requests[1][0].parts[-1].content == "first question"
+
+
+def test_resuming_a_new_conversation_shows_nothing(client):
+    response = client.post("/resume", headers={"X-Praxis-Session": "brand-new-one"})
+
+    assert response.status_code == 200
+    assert response.text == ""
+
+
+def test_conversations_are_kept_apart(client, model):
+    ask(client, "first")
+    ask(client, "second")
+    ask(client, "other", session={"X-Praxis-Session": "another-one"})
+
+    same_session, other_session = model.requests[1], model.requests[2]
+    assert len(same_session) == 3  # first request, its response, second request
+    assert len(other_session) == 1
 
 
 # --- other actions, sessions, origins ---------------------------------------
@@ -455,23 +760,14 @@ def test_session_header_is_required(client, model):
     response = client.post("/intent", json={"intent": "hi"})
 
     assert response.status_code == 422
+    assert client.post("/resume").status_code == 422
     assert model.requests == []
 
 
-def test_a_session_keeps_its_conversation(client, model):
-    client.post("/intent", json={"intent": "first"}, headers=SESSION)
-    client.post("/intent", json={"intent": "second"}, headers=SESSION)
-    client.post("/intent", json={"intent": "other"}, headers={"X-Praxis-Session": "another-one"})
-
-    same_session, other_session = model.requests[1], model.requests[2]
-    assert len(same_session) == 3  # first request, its response, second request
-    assert len(other_session) == 1
-
-
 def test_other_origins_fail_cors_preflight(client):
-    def preflight(origin):
+    def preflight(origin, path="/intent"):
         return client.options(
-            "/intent",
+            path,
             headers={
                 "Origin": origin,
                 "Access-Control-Request-Method": "POST",
@@ -481,18 +777,20 @@ def test_other_origins_fail_cors_preflight(client):
 
     assert preflight("http://localhost:1420").status_code == 200
     assert preflight("https://evil.example").status_code == 400
+    assert preflight("https://evil.example", "/resume").status_code == 400
 
 
 # --- the real server process ------------------------------------------------
 
 
-def test_praxis_fs_is_started_and_reached_over_stdio(audit, model, home, monkeypatch):
+def test_praxis_fs_is_started_and_reached_over_stdio(audit, memory, model, home, monkeypatch):
     monkeypatch.setenv("PRAXIS_FS_ROOTS", str(home))
-    app = create_app(audit=audit, model_for=model.for_alias)  # the default: a praxis-fs subprocess
+    # The default: praxis-fs as a subprocess.
+    app = create_app(audit=audit, conversations=memory, model_for=model.for_alias)
 
     with TestClient(app) as stdio_client:
         response = stdio_client.post(
             "/action", json=action("open", {"target": "docs", "kind": "directory"}), headers=SESSION
         )
 
-    assert components(response)["b0_e0_name"]["text"] == "plan.md"
+    assert workspace(response)["f0_e0_name"]["text"] == "plan.md"

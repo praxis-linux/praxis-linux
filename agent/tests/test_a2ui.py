@@ -3,8 +3,9 @@ import os
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
+from praxis_agent.memory import TurnSummary
 from praxis_agent.tools.files import Entry, FileText, Listing
-from praxis_agent.ui.a2ui import MAX_BLOCKS, MAX_CARDS, build_messages
+from praxis_agent.ui.a2ui import MAX_BLOCKS, MAX_CARDS, build_messages, build_trail
 from praxis_agent.ui.plan import (
     Card,
     CardsBlock,
@@ -16,8 +17,14 @@ from praxis_agent.ui.plan import (
 )
 from sample_plan import SAMPLE_SCREEN
 
-# Also read by canvas/src/a2ui/contract.test.tsx, which feeds it to the real renderer.
+# Also read by canvas/src/a2ui/contract.test.tsx, which feeds them to the real renderer.
 GOLDEN = Path(__file__).parent / "golden" / "workspace_messages.json"
+TRAIL_GOLDEN = Path(__file__).parent / "golden" / "trail_messages.json"
+
+SAMPLE_TURNS = [
+    TurnSummary(n=1, label="plan a project", title="Plan a project", mode="conversation"),
+    TurnSummary(n=2, label="show my notes", title="notes.md", mode="file"),
+]
 
 
 def screen(*blocks, **fields):
@@ -40,13 +47,31 @@ def child_refs(component):
     return refs
 
 
-def test_matches_golden():
-    messages = build(SAMPLE_SCREEN)
+def matches_golden(messages, golden):
     if os.environ.get("UPDATE_GOLDEN"):
-        GOLDEN.parent.mkdir(exist_ok=True)
+        golden.parent.mkdir(exist_ok=True)
         text = json.dumps(messages, indent=2, ensure_ascii=False) + "\n"
-        GOLDEN.write_bytes(text.encode("utf-8"))
-    assert messages == json.loads(GOLDEN.read_text(encoding="utf-8"))
+        golden.write_bytes(text.encode("utf-8"))
+    return messages == json.loads(golden.read_text(encoding="utf-8"))
+
+
+def test_matches_golden():
+    assert matches_golden(build(SAMPLE_SCREEN), GOLDEN)
+
+
+def test_trail_matches_golden():
+    assert matches_golden(build_trail(SAMPLE_TURNS, current=2), TRAIL_GOLDEN)
+
+
+def test_the_trail_lists_turns_in_order_and_marks_the_one_on_screen():
+    shown = components_of(build_trail(SAMPLE_TURNS, current=1))
+
+    assert shown["root"]["children"] == ["trail_head", "t1", "t2"]
+    assert shown["t1_label"]["text"] == "▸ plan a project"
+    assert shown["t2_label"]["text"] == "show my notes"
+    assert shown["t2"]["action"]["event"] == {"name": "revisit", "context": {"turn": 2}}
+    # Requests are shown as typed, never read as Markdown.
+    assert {shown[f"t{n}_label"]["variant"] for n in (1, 2)} == {"h5"}
 
 
 def test_replaces_the_surface_before_populating_it():
@@ -154,46 +179,46 @@ def listing(*entries, total=None, truncated=False, pattern=None):
 def test_each_listed_entry_opens_what_it_names():
     components = components_of(build(screen(listing(entry("docs", "directory"), entry("a.txt")))))
 
-    assert components["b0_e0"]["action"]["event"] == {
+    assert components["f0_e0"]["action"]["event"] == {
         "name": "open",
         "context": {"target": "/home/ada/docs", "kind": "directory"},
     }
-    assert components["b0_e1"]["action"]["event"]["context"] == {
+    assert components["f0_e1"]["action"]["event"]["context"] == {
         "target": "/home/ada/a.txt",
         "kind": "file",
     }
-    assert components["b0_e0_name"]["text"] == "docs/"
-    assert components["b0_e0_meta"]["text"] == "folder"
-    assert components["b0_e1_meta"]["text"] == "10 bytes · 2026-09-29 14:05"
+    assert components["f0_e0_name"]["text"] == "docs/"
+    assert components["f0_e0_meta"]["text"] == "folder"
+    assert components["f0_e1_meta"]["text"] == "10 bytes · 2026-09-29 14:05"
 
 
 def test_file_names_are_never_read_as_markdown():
     components = components_of(build(screen(listing(entry("__init__.py"), entry("*draft*.md")))))
 
     # Only the body variant goes through the Markdown renderer.
-    assert components["b0_e0_name"] == {
-        "id": "b0_e0_name",
+    assert components["f0_e0_name"] == {
+        "id": "f0_e0_name",
         "component": "Text",
         "text": "__init__.py",
         "variant": "h5",
     }
-    assert components["b0_e1_name"]["variant"] == "h5"
-    assert components["b0_head"]["variant"] == "caption"
+    assert components["f0_e1_name"]["variant"] == "h5"
+    assert components["f0_head"]["variant"] == "caption"
 
 
 def test_file_times_are_shown_in_the_given_timezone():
     plus_five_thirty = timezone(timedelta(hours=5, minutes=30))
     messages = build_messages(screen(listing(entry("a.txt"))), timezone=plus_five_thirty)
 
-    assert components_of(messages)["b0_e0_meta"]["text"] == "10 bytes · 2026-09-29 19:35"
+    assert components_of(messages)["f0_e0_meta"]["text"] == "10 bytes · 2026-09-29 19:35"
 
 
 def test_listing_heads_say_what_is_listed():
     folder = components_of(build(screen(listing(entry("a.txt")))))
     search = components_of(build(screen(listing(entry("a.py"), entry("b.py"), pattern="*.py"))))
 
-    assert folder["b0_head"]["text"] == "/home/ada · 1 item"
-    assert search["b0_head"]["text"] == "2 files matching “*.py” in /home/ada"
+    assert folder["f0_head"]["text"] == "/home/ada · 1 item"
+    assert search["f0_head"]["text"] == "2 files matching “*.py” in /home/ada"
 
 
 def test_search_rows_say_which_subfolder_a_file_is_in():
@@ -201,10 +226,10 @@ def test_search_rows_say_which_subfolder_a_file_is_in():
     found = components_of(build(screen(listing(deep, pattern="*.py"))))
     listed = components_of(build(screen(listing(deep))))
 
-    assert found["b0_e0_name"]["text"] == "code/utils/helpers.py"
-    assert listed["b0_e0_name"]["text"] == "helpers.py"
+    assert found["f0_e0_name"]["text"] == "code/utils/helpers.py"
+    assert listed["f0_e0_name"]["text"] == "helpers.py"
     assert (
-        found["b0_e0"]["action"]["event"]["context"]["target"] == "/home/ada/code/utils/helpers.py"
+        found["f0_e0"]["action"]["event"]["context"]["target"] == "/home/ada/code/utils/helpers.py"
     )
 
 
@@ -216,23 +241,23 @@ def test_paths_under_the_home_folder_are_written_with_a_tilde():
 
     shown = components_of(build(screen(in_home, at_home, file)))
 
-    assert shown["b0_head"]["text"] == "~/Documents · 0 items"
-    assert shown["b1_head"]["text"] == "~ · 0 items"
-    assert shown["b2_head"]["text"] == "~/notes.txt · 1 byte"
+    assert shown["f0_head"]["text"] == "~/Documents · 0 items"
+    assert shown["f1_head"]["text"] == "~ · 0 items"
+    assert shown["f2_head"]["text"] == "~/notes.txt · 1 byte"
 
 
 def test_a_listing_that_was_cut_short_says_so():
     components = components_of(build(screen(listing(entry("a.txt"), total=500, truncated=True))))
 
-    assert components["b0_more"]["text"] == "Showing the first 1."
-    assert components["b0"]["children"][-1] == "b0_more"
+    assert components["f0_more"]["text"] == "Showing the first 1."
+    assert components["f0"]["children"][-1] == "f0_more"
 
 
 def test_an_empty_listing_has_no_rows_and_no_note():
     components = components_of(build(screen(listing())))
 
-    assert components["b0"]["children"] == ["b0_head"]
-    assert components["b0_head"]["text"] == "/home/ada · 0 items"
+    assert components["f0"]["children"] == ["f0_head"]
+    assert components["f0_head"]["text"] == "/home/ada · 0 items"
 
 
 def file_components(content, *, path="/home/ada/notes.md", truncated=False, size=None):
@@ -244,31 +269,31 @@ def file_components(content, *, path="/home/ada/notes.md", truncated=False, size
 def test_a_file_is_shown_as_it_is_on_disk_inside_a_fence():
     components = file_components("# Title\n\n*not* rendered\n")
 
-    assert components["b0_text"]["text"] == "```md\n# Title\n\n*not* rendered\n\n```"
-    assert components["b0_head"]["text"] == "/home/ada/notes.md · 24 bytes"
-    assert components["b0"]["children"] == ["b0_head", "b0_text"]
+    assert components["f0_text"]["text"] == "```md\n# Title\n\n*not* rendered\n\n```"
+    assert components["f0_head"]["text"] == "/home/ada/notes.md · 24 bytes"
+    assert components["f0"]["children"] == ["f0_head", "f0_text"]
 
 
 def test_a_file_that_is_one_fenced_block_is_not_unwrapped():
     content = "```python\nx = 1\n```"
 
-    assert file_components(content)["b0_text"]["text"] == f"````md\n{content}\n````"
+    assert file_components(content)["f0_text"]["text"] == f"````md\n{content}\n````"
 
 
 def test_a_cut_off_file_and_an_empty_file_say_so():
     cut = file_components("abc", truncated=True, size=9000)
     empty = file_components("")
 
-    assert cut["b0_more"]["text"] == "This is only the beginning of the file."
-    assert empty["b0_more"]["text"] == "The file is empty."
-    assert "b0_text" not in empty
+    assert cut["f0_more"]["text"] == "This is only the beginning of the file."
+    assert empty["f0_more"]["text"] == "The file is empty."
+    assert "f0_text" not in empty
 
 
 def test_the_folder_above_is_offered_when_there_is_one():
     with_up = components_of(build(screen(listing(), up="/home")))
     without = components_of(build(screen(listing())))
 
-    assert with_up["root"]["children"] == ["title", "up", "b0"]
+    assert with_up["root"]["children"] == ["title", "up", "f0"]
     assert with_up["up"]["action"]["event"]["context"] == {"target": "/home", "kind": "directory"}
     assert with_up["up_label"]["text"] == "↑ home"
     assert "up" not in without

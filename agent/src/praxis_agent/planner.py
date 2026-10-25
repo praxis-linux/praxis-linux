@@ -7,13 +7,20 @@ with a 7B model it either never fired (under constrained output) or looped.
 """
 
 import os
-from collections.abc import Awaitable, Callable
+import time
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from pydantic_ai import Agent
-from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import (
+    ModelMessage,
+    PartDeltaEvent,
+    PartStartEvent,
+    TextPart,
+    TextPartDelta,
+)
 from pydantic_ai.models import Model
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.output import NativeOutput
@@ -30,7 +37,7 @@ from .tools.files import (
     ToolFailure,
     describe,
 )
-from .ui.plan import CardsBlock, FormBlock, Screen, TextBlock, UIPlan
+from .ui.plan import CardsBlock, CodeBlock, FormBlock, Screen, TextBlock, UIPlan
 
 # Lookups allowed before the model has to reply with what it has.
 MAX_LOOKUPS = 3
@@ -97,6 +104,23 @@ class FinalStep(BaseModel):
 
 RunLookup = Callable[[Lookup], Awaitable[Listing | FileText]]
 
+# How often a reply being written is redrawn, at most.
+DRAFT_INTERVAL = 0.1
+
+
+@dataclass
+class Looking:
+    """The model asked for a lookup, which is about to run."""
+
+    lookup: Lookup
+
+
+@dataclass
+class Draft:
+    """The reply so far, while the model is still writing it."""
+
+    screen: Screen
+
 
 @dataclass
 class Turn:
@@ -105,34 +129,60 @@ class Turn:
     found: list[Listing | FileText]
     # Why praxis-fs refused a lookup, for each one it refused.
     refused: list[str]
+    # What the model was sent and answered during this turn only.
     messages: list[ModelMessage]
     requests: int
 
     def screen(self) -> Screen:
-        """The reply with what was looked up placed after the answer, before any cards or form.
+        return compose(self.reply, self.found, self.refused)
 
-        Refusals are stated in the agent's own words as well: the model's account of
-        one tends to be that the file does not exist.
-        """
-        blocks = list(self.reply.blocks)
+
+Event = Looking | Draft | Turn
+
+
+def compose(
+    reply: UIPlan,
+    found: list[Listing | FileText],
+    refused: list[str],
+    *,
+    partial: bool = False,
+) -> Screen:
+    """The reply with what was looked up placed after the answer, before any cards or form.
+
+    Refusals are stated in the agent's own words as well: the model's account of
+    one tends to be that the file does not exist.
+
+    A `partial` reply is still being written. Its last block is left out unless it
+    is text or code, which can be shown growing; cards and forms appear once whole.
+    """
+    blocks = list(reply.blocks)
+    if partial and blocks and not isinstance(blocks[-1], TextBlock | CodeBlock):
+        blocks.pop()
+    shown: list[Listing | FileText | TextBlock] = []
+    seen: set[tuple[str | None, ...]] = set()
+    for result in found:
         # A search that found nothing has nothing to show; the reply says so.
-        shown: list[Listing | FileText | TextBlock] = [
-            r for r in self.found if not (isinstance(r, Listing) and r.pattern and not r.total)
-        ]
-        shown += [
-            TextBlock(kind="text", style="caption", text=f"Not read: {reason}")
-            for reason in dict.fromkeys(self.refused)
-        ]
-        at = next(
-            (i for i, block in enumerate(blocks) if isinstance(block, CardsBlock | FormBlock)),
-            len(blocks),
-        )
-        return Screen(
-            # A screen about files is in File mode, whatever the model called it.
-            mode="file" if shown else self.reply.mode,
-            title=self.reply.title,
-            blocks=[*blocks[:at], *shown, *blocks[at:]],
-        )
+        if isinstance(result, Listing) and result.pattern and not result.total:
+            continue
+        # A model that looks at the same thing twice still shows it once.
+        key = (result.path,) if isinstance(result, FileText) else (result.directory, result.pattern)
+        if key not in seen:
+            seen.add(key)
+            shown.append(result)
+    shown += [
+        TextBlock(kind="text", style="caption", text=f"Not read: {reason}")
+        for reason in dict.fromkeys(refused)
+    ]
+    at = next(
+        (i for i, block in enumerate(blocks) if isinstance(block, CardsBlock | FormBlock)),
+        len(blocks),
+    )
+    return Screen(
+        # A screen about files is in File mode, whatever the model called it.
+        mode="file" if shown else reply.mode,
+        title=reply.title,
+        blocks=[*blocks[:at], *shown, *blocks[at:]],
+    )
 
 
 # Schema-constrained JSON output rather than a tool call. With a 7B local model this
@@ -157,30 +207,49 @@ async def plan(
     history: list[ModelMessage],
     lookup: RunLookup,
     main_folder: str,
-) -> Turn:
+) -> AsyncIterator[Event]:
     """Run one turn: let the model look things up with `lookup`, then reply.
 
-    `main_folder` is the folder the model's relative paths start from.
+    Yields a `Looking` before each lookup, `Draft`s while the reply is being written,
+    and finally the `Turn`. `main_folder` is the folder the model's relative paths
+    start from.
     """
     found: list[Listing | FileText] = []
     refused: list[str] = []
     requests = 0
+    start = len(history)
     ask = prompt
     for used in range(MAX_LOOKUPS + 1):
-        result = await planner.run(
+        output_type = Step if used < MAX_LOOKUPS else FinalStep
+        # iter() rather than run_stream(): run_stream() cannot retry an invalid reply.
+        async with planner.iter(
             ask,
             model=model,
             message_history=history,
             instructions=INSTRUCTIONS,
-            output_type=NativeOutput(Step if used < MAX_LOOKUPS else FinalStep),
-        )
+            output_type=NativeOutput(output_type),
+        ) as run:
+            async for node in run:
+                if Agent.is_model_request_node(node):
+                    async with node.stream(run.ctx) as stream:
+                        async for reply in _replies_so_far(stream, output_type):
+                            yield Draft(compose(reply, found, refused, partial=True))
+            result = run.result
+        assert result is not None
         requests += result.usage.requests
         history = result.all_messages()
         step = result.output.step
         if isinstance(step, UIPlan):
-            return Turn(
-                reply=step, found=found, refused=refused, messages=history, requests=requests
+            yield Turn(
+                reply=step,
+                found=found,
+                refused=refused,
+                messages=history[start:],
+                requests=requests,
             )
+            return
+
+        yield Looking(step)
         try:
             outcome = await lookup(step)
         except ToolFailure as failure:
@@ -204,3 +273,31 @@ async def plan(
                 "The user can already see this. Next step?"
             )
     raise AssertionError("the final step can only be a reply")
+
+
+async def _replies_so_far(
+    stream: AsyncIterable[Any], output_type: type[Step] | type[FinalStep]
+) -> AsyncIterator[UIPlan]:
+    """The reply as far as the model has written it, as it streams in.
+
+    Nothing is yielded for a step that turns out to be a lookup.
+    """
+    schema: TypeAdapter[Step | FinalStep] = TypeAdapter(output_type)
+    text = ""
+    last = 0.0
+    async for event in stream:
+        if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
+            text = event.part.content
+        elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
+            text += event.delta.content_delta
+        else:
+            continue
+        if time.monotonic() - last < DRAFT_INTERVAL:
+            continue
+        try:
+            step = schema.validate_json(text, experimental_allow_partial="trailing-strings").step
+        except ValidationError:
+            continue
+        if isinstance(step, UIPlan):
+            last = time.monotonic()
+            yield step

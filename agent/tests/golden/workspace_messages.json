@@ -27,8 +27,8 @@
             "b1",
             "b2",
             "b3",
-            "b4",
-            "b5"
+            "f0",
+            "f1"
           ]
         },
         {
@@ -187,38 +187,38 @@
           "variant": "body"
         },
         {
-          "id": "b4_head",
+          "id": "f0_head",
           "component": "Text",
           "text": "/home/ada/projects · 2 items",
           "variant": "caption"
         },
         {
-          "id": "b4_e0_name",
+          "id": "f0_e0_name",
           "component": "Text",
           "text": "praxis/",
           "variant": "h5"
         },
         {
-          "id": "b4_e0_meta",
+          "id": "f0_e0_meta",
           "component": "Text",
           "text": "folder",
           "variant": "caption"
         },
         {
-          "id": "b4_e0_row",
+          "id": "f0_e0_row",
           "component": "Row",
           "children": [
-            "b4_e0_name",
-            "b4_e0_meta"
+            "f0_e0_name",
+            "f0_e0_meta"
           ],
           "justify": "spaceBetween",
           "align": "center"
         },
         {
-          "id": "b4_e0",
+          "id": "f0_e0",
           "component": "Button",
           "variant": "borderless",
-          "child": "b4_e0_row",
+          "child": "f0_e0_row",
           "action": {
             "event": {
               "name": "open",
@@ -230,32 +230,32 @@
           }
         },
         {
-          "id": "b4_e1_name",
+          "id": "f0_e1_name",
           "component": "Text",
           "text": "__init__.py",
           "variant": "h5"
         },
         {
-          "id": "b4_e1_meta",
+          "id": "f0_e1_meta",
           "component": "Text",
           "text": "2.0 KB · 2026-09-29 14:05",
           "variant": "caption"
         },
         {
-          "id": "b4_e1_row",
+          "id": "f0_e1_row",
           "component": "Row",
           "children": [
-            "b4_e1_name",
-            "b4_e1_meta"
+            "f0_e1_name",
+            "f0_e1_meta"
           ],
           "justify": "spaceBetween",
           "align": "center"
         },
         {
-          "id": "b4_e1",
+          "id": "f0_e1",
           "component": "Button",
           "variant": "borderless",
-          "child": "b4_e1_row",
+          "child": "f0_e1_row",
           "action": {
             "event": {
               "name": "open",
@@ -267,32 +267,32 @@
           }
         },
         {
-          "id": "b4",
+          "id": "f0",
           "component": "Column",
           "children": [
-            "b4_head",
-            "b4_e0",
-            "b4_e1"
+            "f0_head",
+            "f0_e0",
+            "f0_e1"
           ]
         },
         {
-          "id": "b5_head",
+          "id": "f1_head",
           "component": "Text",
           "text": "/home/ada/projects/notes.md · 27 bytes",
           "variant": "caption"
         },
         {
-          "id": "b5_text",
+          "id": "f1_text",
           "component": "Text",
           "text": "```md\n# Notes\n\n- *ship* the demo\n\n```",
           "variant": "body"
         },
         {
-          "id": "b5",
+          "id": "f1",
           "component": "Column",
           "children": [
-            "b5_head",
-            "b5_text"
+            "f1_head",
+            "f1_text"
           ]
         }
       ]

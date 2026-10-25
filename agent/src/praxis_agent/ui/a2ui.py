@@ -8,20 +8,27 @@ here rather than asked of the model.
 import re
 from datetime import tzinfo
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..tools.files import Entry, FileText, Listing, human_size
 from .plan import CardsBlock, CodeBlock, FormBlock, Screen, TextBlock
+
+if TYPE_CHECKING:
+    # memory imports ui.plan, so importing it here at runtime would be circular.
+    from ..memory import TurnSummary
 
 VERSION = "v0.9"
 # Must match PRAXIS_CATALOG_ID in canvas/src/a2ui/catalog.tsx.
 PRAXIS_CATALOG_ID = "praxis-linux:catalog:phase0"
 WORKSPACE_SURFACE = "workspace"
+CONTEXT_SURFACE = "context"
 
 # Bounds on what one screen may hold, whatever the model returns.
 MAX_BLOCKS = 12
 MAX_CARDS = 8
 MAX_FIELDS = 8
+# How much of a request the conversation trail shows.
+TRAIL_LABEL_CHARS = 80
 
 _TEXT_VARIANT = {"heading": "h3", "body": "body", "caption": "caption"}
 
@@ -36,6 +43,55 @@ def build_messages(
 
     File times are shown in `timezone`; the machine's own when it is not given.
     """
+    return replace(surface_id, *compile_screen(screen, timezone=timezone))
+
+
+def replace(surface_id: str, components: list[Component], data: dict[str, Any]) -> list[Message]:
+    """Messages that throw away whatever `surface_id` shows and draw `components` instead."""
+    return [
+        # Deleting a surface that does not exist is a no-op, so the agent can
+        # replace the workspace without tracking what the canvas is showing.
+        {"version": VERSION, "deleteSurface": {"surfaceId": surface_id}},
+        {
+            "version": VERSION,
+            "createSurface": {"surfaceId": surface_id, "catalogId": PRAXIS_CATALOG_ID},
+        },
+        *update(surface_id, components, data),
+    ]
+
+
+def update(surface_id: str, components: list[Component], data: dict[str, Any]) -> list[Message]:
+    """Messages that redraw `surface_id` in place, keeping what the user sees steady.
+
+    Components are matched by id. Only use this when every component already on the
+    surface is among `components`: one that is not would be left unreachable from the
+    root, which the Canvas rejects.
+    """
+    messages: list[Message] = [
+        {
+            "version": VERSION,
+            "updateComponents": {"surfaceId": surface_id, "components": components},
+        }
+    ]
+    if data:
+        messages.append(
+            {
+                "version": VERSION,
+                "updateDataModel": {"surfaceId": surface_id, "path": "/", "value": data},
+            }
+        )
+    return messages
+
+
+def compile_screen(
+    screen: Screen, *, timezone: tzinfo | None = None
+) -> tuple[list[Component], dict[str, Any]]:
+    """The components that draw `screen`, and the data model its forms bind to.
+
+    The model's blocks get ids `b0`, `b1`, ... and what was looked up gets `f0`,
+    `f1`, ...: a listing keeps its id while the reply around it is still being
+    written, so the screen can be redrawn in place as it streams.
+    """
     components: list[Component] = [_plain("title", screen.title, "h2")]
     root_children = ["title"]
     data: dict[str, Any] = {}
@@ -44,8 +100,12 @@ def build_messages(
         components.extend(_open_button("up", f"↑ {Path(screen.up).name or screen.up}", screen.up))
         root_children.append("up")
 
-    for i, block in enumerate(screen.blocks[:MAX_BLOCKS]):
-        block_id = f"b{i}"
+    replies = found = 0
+    for block in screen.blocks[:MAX_BLOCKS]:
+        if isinstance(block, Listing | FileText):
+            block_id, found = f"f{found}", found + 1
+        else:
+            block_id, replies = f"b{replies}", replies + 1
         root_children.append(block_id)
         if isinstance(block, TextBlock):
             components.append(_text(block_id, block))
@@ -63,28 +123,42 @@ def build_messages(
             components.extend(_file(block_id, block))
 
     components.insert(0, {"id": "root", "component": "Column", "children": root_children})
+    return components, data
 
-    messages: list[Message] = [
-        # Deleting a surface that does not exist is a no-op, so the agent can
-        # replace the workspace without tracking what the canvas is showing.
-        {"version": VERSION, "deleteSurface": {"surfaceId": surface_id}},
-        {
-            "version": VERSION,
-            "createSurface": {"surfaceId": surface_id, "catalogId": PRAXIS_CATALOG_ID},
-        },
-        {
-            "version": VERSION,
-            "updateComponents": {"surfaceId": surface_id, "components": components},
-        },
-    ]
-    if data:
-        messages.append(
+
+def build_trail(turns: "list[TurnSummary]", current: int | None = None) -> list[Message]:
+    """Messages that draw the conversation so far on the context surface.
+
+    Each turn is a row that brings its screen back; `current` is the one on screen.
+    """
+    components: list[Component] = [_plain("trail_head", "This conversation", "caption")]
+    children = ["trail_head"]
+    for turn in turns:
+        row_id = f"t{turn.n}"
+        children.append(row_id)
+        label = turn.label
+        if len(label) > TRAIL_LABEL_CHARS:
+            label = label[: TRAIL_LABEL_CHARS - 1].rstrip() + "…"
+        if turn.n == current:
+            label = f"▸ {label}"
+        components += [
+            _plain(f"{row_id}_label", label, "h5"),
+            _plain(f"{row_id}_title", turn.title, "caption"),
             {
-                "version": VERSION,
-                "updateDataModel": {"surfaceId": surface_id, "path": "/", "value": data},
-            }
-        )
-    return messages
+                "id": f"{row_id}_body",
+                "component": "Column",
+                "children": [f"{row_id}_label", f"{row_id}_title"],
+            },
+            {
+                "id": row_id,
+                "component": "Button",
+                "variant": "borderless",
+                "child": f"{row_id}_body",
+                "action": {"event": {"name": "revisit", "context": {"turn": turn.n}}},
+            },
+        ]
+    components.insert(0, {"id": "root", "component": "Column", "children": children})
+    return replace(CONTEXT_SURFACE, components, {})
 
 
 def _plain(component_id: str, text: str, variant: str) -> Component:
