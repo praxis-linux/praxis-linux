@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -108,6 +109,8 @@ def test_running_needs_bubblewrap(files):
 def real_runner(files):
     runner = Runner(files)
     if not runner.status().available:
+        if os.environ.get("PRAXIS_RUN_REQUIRE_SANDBOX"):
+            pytest.fail(f"the sandbox is required here: {runner.status().reason}")
         pytest.skip(f"cannot run code here: {runner.status().reason}")
     return runner
 

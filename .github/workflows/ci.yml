@@ -22,6 +22,29 @@ jobs:
       - run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync pytest
 
+  praxis-run:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp-servers/praxis-run
+    env:
+      # The sandbox tests fail here rather than skip: CI is where the sandbox is proven.
+      PRAXIS_RUN_REQUIRE_SANDBOX: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          # Ubuntu 24.04 lets only programs with an AppArmor profile make the user
+          # namespaces bubblewrap needs; the runner's own policy is relaxed instead.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync pytest
+
   agent:
     runs-on: ubuntu-latest
     defaults:

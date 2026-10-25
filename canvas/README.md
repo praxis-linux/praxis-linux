@@ -4,7 +4,7 @@ The Praxis desktop shell. Tauri 2 + React 19 + TypeScript.
 
 ## Status
 
-Scaffolded at **M0.5**, connected to the agent at **M0.6**, conversational since **M0.9**. The Canvas renders A2UI v0.9 surfaces from the agent as they stream in, sends intents and UI actions back, and shows which model served each turn. Modes beyond what the agent can describe in text, code, cards and forms are not built yet — see the [Roadmap](../docs/ROADMAP.md).
+Scaffolded at **M0.5**, connected to the agent at **M0.6**, conversational since **M0.9**, with Code mode since **M0.11**. The Canvas renders A2UI v0.9 surfaces from the agent as they stream in, sends intents and UI actions back, and shows which model served each turn. Modes beyond what the agent can describe in text, code, cards and forms are not built yet — see the [Roadmap](../docs/ROADMAP.md).
 
 ## How it works
 
@@ -12,6 +12,7 @@ Scaffolded at **M0.5**, connected to the agent at **M0.6**, conversational since
 - The agent answers with A2UI messages. `@a2ui/react` renders them; nothing outside the Praxis catalog is accepted.
 - Clicking a card or submitting a form sends an A2UI action to the agent, which answers with the next screen.
 - Files and folders the agent shows are rows you can click: a folder opens its listing, a file its text, an image the image itself (PNG, JPEG, GIF, WebP), carried inline. Those clicks never go through a model.
+- A file's text comes with **Edit**, which opens it in a CodeMirror 6 editor, and **Run** where it can be run. **Save** writes what is in the editor; **Undo** takes it back. A change the agent proposes is shown as a diff, added lines green and removed lines red, with **Apply** and **Discard**. None of these go through a model.
 - While the agent works, a status line says what it is doing, and the reply is drawn as the model writes it.
 - The context rail shows the conversation so far. Clicking a turn shows its screen again.
 - The conversation id is kept in `localStorage`, so a reload picks up where the conversation left off. "New" starts another conversation; "Delete…" asks, then deletes this one.
@@ -34,6 +35,7 @@ canvas/
 │   ├── agent/client.ts       # HTTP + NDJSON client for the agent
 │   ├── a2ui/
 │   │   ├── catalog.tsx       # The Praxis catalog: what the agent may render
+│   │   ├── CodeEditor.tsx    # The catalog's CodeMirror editor, bound to the data model
 │   │   ├── welcome.ts        # The local welcome screen
 │   │   └── contract.test.tsx # Agent contract, tested against the real renderer
 │   ├── layers/               # WorkspaceLayer, ContextRail, IntentLayer
@@ -67,5 +69,5 @@ pnpm build
 ## Planned
 
 - shadcn/ui + Tailwind v4 for Praxis-specific components
-- CodeMirror 6 (Code mode), TipTap (Doc mode)
+- TipTap (Doc mode)
 - Praxis components in the catalog: see [`components/`](../components/README.md)

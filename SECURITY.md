@@ -22,6 +22,7 @@ We will acknowledge receipt within **72 hours** and aim to provide an initial as
 | Privilege escalation via MCP servers | Physical access attacks |
 | Data exfiltration through the Canvas | Theoretical attacks with no practical path |
 | Kill-switch bypass | |
+| A file changed, or code run, without the user's Save, Apply or Run | |
 
 ## Supported versions
 
