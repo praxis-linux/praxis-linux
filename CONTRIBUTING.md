@@ -40,7 +40,7 @@ By participating, you agree to uphold a basic standard of respectful, constructi
 
 ## Security
 
-Found a vulnerability? Don't open a public issue. Email the address listed in [`SECURITY.md`](SECURITY.md).
+Found a vulnerability? Don't open a public issue. Report it privately as described in [`SECURITY.md`](SECURITY.md).
 
 ## Ownership
 
