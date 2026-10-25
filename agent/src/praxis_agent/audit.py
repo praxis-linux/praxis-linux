@@ -91,11 +91,13 @@ class AuditLog:
             (_now(), session_id, tool, json.dumps(arguments, ensure_ascii=False), asked_by),
         )
 
-    def finish_tool(self, call_id: int, *, error: str | None = None) -> None:
+    def finish_tool(
+        self, call_id: int, *, error: str | None = None, status: str | None = None
+    ) -> None:
         with closing(self._connect()) as db, db:
             db.execute(
                 "UPDATE tool_calls SET status = ?, error = ? WHERE id = ?",
-                ("error" if error else "ok", error, call_id),
+                (status or ("error" if error else "ok"), error, call_id),
             )
 
     def _insert(self, statement: str, values: tuple[Any, ...]) -> int:

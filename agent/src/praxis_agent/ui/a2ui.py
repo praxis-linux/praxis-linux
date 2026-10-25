@@ -56,31 +56,46 @@ def replace(surface_id: str, components: list[Component], data: dict[str, Any]) 
             "version": VERSION,
             "createSurface": {"surfaceId": surface_id, "catalogId": PRAXIS_CATALOG_ID},
         },
-        *update(surface_id, components, data),
+        {
+            "version": VERSION,
+            "updateComponents": {"surfaceId": surface_id, "components": components},
+        },
+        *(
+            [
+                {
+                    "version": VERSION,
+                    "updateDataModel": {"surfaceId": surface_id, "path": "/", "value": data},
+                }
+            ]
+            if data
+            else []
+        ),
     ]
 
 
-def update(surface_id: str, components: list[Component], data: dict[str, Any]) -> list[Message]:
+def update(
+    surface_id: str, components: list[Component], data_changes: dict[str, Any]
+) -> list[Message]:
     """Messages that redraw `surface_id` in place, keeping what the user sees steady.
 
     Components are matched by id. Only use this when every component already on the
     surface is among `components`: one that is not would be left unreachable from the
-    root, which the Canvas rejects.
+    root, which the Canvas rejects. `data_changes` holds the forms that are new or
+    changed; each is set on its own, leaving what the user typed into the others.
     """
-    messages: list[Message] = [
+    return [
         {
             "version": VERSION,
             "updateComponents": {"surfaceId": surface_id, "components": components},
-        }
-    ]
-    if data:
-        messages.append(
+        },
+        *(
             {
                 "version": VERSION,
-                "updateDataModel": {"surfaceId": surface_id, "path": "/", "value": data},
+                "updateDataModel": {"surfaceId": surface_id, "path": f"/{key}", "value": value},
             }
-        )
-    return messages
+            for key, value in data_changes.items()
+        ),
+    ]
 
 
 def compile_screen(

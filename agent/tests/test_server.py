@@ -19,6 +19,9 @@ from sample_plan import SAMPLE_REPLY
 
 SESSION = {"X-Praxis-Session": "test-session"}
 
+# Where the Canvas reaches the agent; the agent refuses any other host name.
+AGENT_URL = "http://127.0.0.1:7729"
+
 REPLY = {"step": SAMPLE_REPLY.model_dump()}
 
 
@@ -106,7 +109,7 @@ def make_client(audit, memory, model, home):
             model_for=model.for_alias,
             connect_files=in_process_praxis_fs,
         )
-        return TestClient(app)
+        return TestClient(app, base_url=AGENT_URL)
 
     return make
 
@@ -156,9 +159,12 @@ def surfaces(response):
             components.update({c["id"]: c for c in update["components"]})
             assert reachable(components) == set(components), "an orphaned component"
         elif "updateDataModel" in message:
-            state[message["updateDataModel"]["surfaceId"]]["data"] = message["updateDataModel"][
-                "value"
-            ]
+            update = message["updateDataModel"]
+            surface = state[update["surfaceId"]]
+            if update["path"] == "/":
+                surface["data"] = update["value"]
+            else:
+                surface["data"][update["path"].strip("/")] = update["value"]
     return state
 
 
@@ -776,8 +782,171 @@ def test_other_origins_fail_cors_preflight(client):
         )
 
     assert preflight("http://localhost:1420").status_code == 200
-    assert preflight("https://evil.example").status_code == 400
-    assert preflight("https://evil.example", "/resume").status_code == 400
+    assert preflight("https://evil.example").status_code == 403
+    assert preflight("https://evil.example", "/resume").status_code == 403
+
+
+def test_a_page_that_rebinds_its_domain_to_this_machine_reads_nothing(client, home, audit):
+    # After DNS rebinding the page's requests are same-origin to the browser, so no
+    # CORS preflight happens; only the host and origin they carry give them away.
+    opened = action("open", {"target": str(home / "app.py"), "kind": "file"})
+    rebound = {"Host": "attacker.example:7729", "Origin": "http://attacker.example:7729"}
+
+    by_host = client.post("/action", json=opened, headers={**SESSION, "Host": rebound["Host"]})
+    by_origin = client.post(
+        "/action", json=opened, headers={**SESSION, "Origin": rebound["Origin"]}
+    )
+
+    assert by_host.status_code == 421
+    assert by_origin.status_code == 403
+    assert "print('hi')" not in by_host.text + by_origin.text
+    assert rows(audit, "tool_calls") == []
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:7729", "localhost:7729", "127.0.0.1"])
+def test_the_agent_answers_on_this_machine_by_either_name(client, host):
+    assert client.get("/health", headers={"Host": host}).status_code == 200
+
+
+def test_requests_too_long_for_a_model_are_refused_whatever_carries_them(client, model):
+    too_long = "x" * 8001
+
+    typed = client.post("/intent", json={"intent": too_long}, headers=SESSION)
+    clicked = client.post("/action", json=action("intent", {"text": too_long}), headers=SESSION)
+    submitted = client.post(
+        "/action",
+        json=action("submit", {"purpose": "p", "values": {"a": too_long}}),
+        headers=SESSION,
+    )
+
+    assert (typed.status_code, clicked.status_code, submitted.status_code) == (422, 413, 413)
+    assert model.requests == []
+
+
+# --- when the file service fails ----------------------------------------------
+
+
+@pytest.fixture
+def broken_files_client(audit, memory, model):
+    class Broken:
+        roots = ["/home/ada"]
+
+        async def run(self, lookup):
+            raise RuntimeError("praxis-fs exited")
+
+        def parent(self, directory):
+            return None
+
+    @asynccontextmanager
+    async def broken():
+        yield Broken()
+
+    app = create_app(
+        audit=audit, conversations=memory, model_for=model.for_alias, connect_files=broken
+    )
+    with TestClient(app, base_url=AGENT_URL) as test_client:
+        yield test_client
+
+
+def test_a_click_when_the_file_service_is_down_says_so(broken_files_client, audit):
+    response = broken_files_client.post(
+        "/action", json=action("open", {"target": "docs", "kind": "directory"}), headers=SESSION
+    )
+
+    (event,) = events(response)
+    assert event == {
+        "type": "error",
+        "message": "The file service did not answer, so nothing was read.",
+    }
+    (row,) = rows(audit, "tool_calls")
+    assert row["status"] == "error" and "praxis-fs exited" in row["error"]
+
+
+def test_a_lookup_when_the_file_service_is_down_is_told_to_the_model(
+    broken_files_client, model, audit
+):
+    model.script = [{"step": {"do": "list_directory"}}]
+
+    response = ask(broken_files_client, "my files")
+
+    assert "list_directory failed: The file service did not answer" in model.prompt()
+    assert workspace(response)["title"]["text"] == SAMPLE_REPLY.title
+    assert rows(audit, "model_calls")[0]["status"] == "ok"
+
+
+# --- what the model and the user are told ----------------------------------------
+
+
+def test_a_missing_model_is_explained(client, model):
+    from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
+
+    from praxis_agent.server import model_failure
+
+    assert "was not found" in model_failure(ModelHTTPError(404, "local-fast"), "local-fast")
+    assert "refused the API key" in model_failure(ModelHTTPError(401, "x"), "cloud-strong")
+    assert "LiteLLM proxy" in model_failure(ModelAPIError("x", "Connection error."), "local-fast")
+
+
+def test_refusals_reach_the_model_without_the_users_folder_paths(client, model, home):
+    model.script = [{"step": {"do": "read_text_file", "path": "../outside.txt"}}]
+
+    ask(client, "read the file next to my home")
+
+    assert "read_text_file was refused:" in model.prompt()
+    assert str(home) not in model.prompt()
+    assert "the main folder" in model.prompt()
+
+
+def test_the_audit_log_counts_the_request_as_the_model_received_it(client, model, home, audit):
+    client.post(
+        "/action",
+        json=action("open", {"target": str(home / "app.py"), "kind": "file"}),
+        headers=SESSION,
+    )
+
+    ask(client, "summarise this")
+
+    sent = model.prompt(0)
+    assert sent != "summarise this"
+    assert rows(audit, "model_calls")[0]["prompt_chars"] == len(sent)
+
+
+# --- streaming, with the limits of a screen --------------------------------------
+
+
+def form(*names):
+    return {
+        "kind": "form",
+        "purpose": "p",
+        "fields": [{"name": name, "label": name} for name in names],
+    }
+
+
+def test_a_second_form_does_not_wipe_what_was_typed_into_the_first(client, model):
+    model.script = [reply(form("a"), form("b"), text("Fill both in."), mode="conversation")]
+
+    response = ask(client, "two forms")
+
+    paths = [m["updateDataModel"]["path"] for m in a2ui(response) if "updateDataModel" in m]
+    assert paths == ["/b0", "/b1"]
+    assert surfaces(response)["workspace"]["data"] == {"b0": {"a": ""}, "b1": {"b": ""}}
+
+
+def test_what_was_looked_up_survives_a_reply_that_fills_the_screen(client, model):
+    model.script = [
+        {"step": {"do": "list_directory"}},
+        {"step": {"do": "read_text_file", "path": ".env"}},
+        reply(*[text(f"paragraph {i}") for i in range(20)]),
+    ]
+
+    shown = workspace(ask(client, "tell me everything"))
+
+    children = shown["root"]["children"]
+    assert len(children) == 1 + 12  # the title, and a full screen
+    assert "f0" in children
+    assert any(
+        shown[c].get("text", "").startswith("Not read:") for c in children if c.startswith("b")
+    )
 
 
 # --- the real server process ------------------------------------------------
@@ -788,7 +957,7 @@ def test_praxis_fs_is_started_and_reached_over_stdio(audit, memory, model, home,
     # The default: praxis-fs as a subprocess.
     app = create_app(audit=audit, conversations=memory, model_for=model.for_alias)
 
-    with TestClient(app) as stdio_client:
+    with TestClient(app, base_url=AGENT_URL) as stdio_client:
         response = stdio_client.post(
             "/action", json=action("open", {"target": "docs", "kind": "directory"}), headers=SESSION
         )

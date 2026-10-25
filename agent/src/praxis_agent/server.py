@@ -12,15 +12,16 @@ Every endpoint but /health answers with newline-delimited JSON, one event per li
 import json
 import logging
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.models import Model
 
 from . import planner, router
@@ -47,10 +48,16 @@ log = logging.getLogger("praxis_agent")
 
 # Vite dev server, and the Tauri webview origin on Linux/macOS and on Windows.
 ALLOWED_ORIGINS = ["http://localhost:1420", "tauri://localhost", "http://tauri.localhost"]
+# The names the agent may be reached by. Anything else is a page that has rebound
+# its own domain to this machine.
+ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
+
+# The longest request, typed or carried by an action, that is passed to a model.
+MAX_REQUEST_CHARS = 8000
 
 
 class IntentRequest(BaseModel):
-    intent: str = Field(min_length=1, max_length=8000)
+    intent: str = Field(min_length=1, max_length=MAX_REQUEST_CHARS)
 
 
 class Action(BaseModel):
@@ -73,12 +80,35 @@ def prompt_for_action(action: Action) -> tuple[str, str]:
     if action.name == "intent":
         text = action.context.get("text")
         if isinstance(text, str) and text.strip():
-            return text, text
+            return _bounded(text), text
     elif action.name == "submit":
-        purpose = action.context.get("purpose", "")
+        purpose = str(action.context.get("purpose", ""))
         values = json.dumps(action.context.get("values", {}), ensure_ascii=False)
-        return f"I filled in the form ({purpose}). My answers: {values}", f"Form: {purpose}"
+        prompt = f"I filled in the form ({purpose}). My answers: {values}"
+        return _bounded(prompt), f"Form: {purpose}"
     raise HTTPException(status_code=400, detail=f"Unsupported action: {action.name}")
+
+
+def _bounded(prompt: str) -> str:
+    if len(prompt) > MAX_REQUEST_CHARS:
+        raise HTTPException(status_code=413, detail="That request is too long.")
+    return prompt
+
+
+def model_failure(error: Exception, alias: str) -> str:
+    """What to tell the user when the model could not be used."""
+    if isinstance(error, ModelHTTPError):
+        if error.status_code == 404:
+            return (
+                f"The model behind “{alias}” was not found. "
+                "Is it pulled in Ollama, and named as in litellm_config.yaml?"
+            )
+        if error.status_code in (401, 403):
+            return f"The provider behind “{alias}” refused the API key."
+        return f"The model service answered with an error (HTTP {error.status_code})."
+    if isinstance(error, ModelAPIError):
+        return "Could not reach the model service. Is the LiteLLM proxy running?"
+    return f"The model call failed: {type(error).__name__}"
 
 
 def lookup_for_open(action: Action) -> ListDirectory | ReadTextFile:
@@ -154,6 +184,22 @@ def create_app(
         allow_headers=["Content-Type", "X-Praxis-Session"],
     )
 
+    # Added last, so it runs first. CORS alone does not stop a web page that has
+    # pointed its own domain at 127.0.0.1 (DNS rebinding): to the browser its
+    # requests are then same-origin. Such a request still names the page's host
+    # and origin, which are refused here.
+    @app.middleware("http")
+    async def only_from_this_machine(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        host = request.headers.get("host", "").rsplit(":", 1)[0]
+        if host not in ALLOWED_HOSTS:
+            return PlainTextResponse("This agent only answers on 127.0.0.1.", status_code=421)
+        origin = request.headers.get("origin")
+        if origin is not None and origin not in ALLOWED_ORIGINS:
+            return PlainTextResponse("This agent only answers the Praxis Canvas.", status_code=403)
+        return await call_next(request)
+
     # Required on every turn. A custom header also makes the request non-simple,
     # so a web page on another origin cannot send it without passing CORS.
     def session(x_praxis_session: Annotated[str, Header(min_length=8, max_length=64)]) -> str:
@@ -178,10 +224,21 @@ def create_app(
         except ToolFailure as failure:
             audit_log.finish_tool(call_id, error=str(failure)[:500])
             raise
+        except Exception as error:
+            log.exception("praxis-fs failed")
+            audit_log.finish_tool(call_id, error=repr(error)[:500])
+            raise ToolFailure("The file service did not answer, so nothing was read.") from error
+        except BaseException:
+            # The Canvas went away mid-turn, or the agent is shutting down.
+            audit_log.finish_tool(call_id, status="cancelled")
+            raise
         audit_log.finish_tool(call_id)
         return result
 
     async def turn(session_id: str, prompt: str, label: str, purpose: str) -> AsyncIterator[str]:
+        looking_at = viewing.get(session_id)
+        if looking_at:
+            prompt = f"{prompt}\n\n(On the user's screen right now: {looking_at}.)"
         route = router.route(prompt)
         try:
             call_id = audit_log.begin(
@@ -198,9 +255,6 @@ def create_app(
             return
 
         yield _line(type="call", model=route.model, destination=route.destination)
-        looking_at = viewing.get(session_id)
-        if looking_at:
-            prompt = f"{prompt}\n\n(On the user's screen right now: {looking_at}.)"
         canvas = _Workspace()
         started = time.monotonic()
         result: Turn | None = None
@@ -224,7 +278,7 @@ def create_app(
             audit_log.finish(
                 call_id, status="error", duration_ms=_elapsed_ms(started), error=repr(exc)[:500]
             )
-            yield _line(type="error", message=f"The model call failed: {type(exc).__name__}")
+            yield _line(type="error", message=model_failure(exc, route.model))
             return
         except BaseException:
             # The Canvas went away mid-turn, or the agent is shutting down.
@@ -236,18 +290,27 @@ def create_app(
         )
 
         screen = result.screen()
+        viewing[session_id] = shown = on_screen(screen, main_folder())
+        # Stored before it is drawn: a Canvas that goes away during the last drawing
+        # still finds the turn in its trail when it comes back.
+        try:
+            n: int | None = memory.record(
+                session_id,
+                label=label,
+                title=screen.title,
+                mode=screen.mode,
+                messages=result.messages,
+                screen=replace(WORKSPACE_SURFACE, *compile_screen(screen)),
+                on_screen=shown,
+            )
+        except Exception:
+            log.exception("could not store the turn")
+            n = None
         for line in canvas.draw(screen):
             yield line
-        viewing[session_id] = shown = on_screen(screen, main_folder())
-        n = memory.record(
-            session_id,
-            label=label,
-            title=screen.title,
-            mode=screen.mode,
-            messages=result.messages,
-            screen=replace(WORKSPACE_SURFACE, *compile_screen(screen)),
-            on_screen=shown,
-        )
+        if n is None:
+            yield _line(type="error", message="This reply could not be saved to the conversation.")
+            return
         for line in _trail(memory, session_id, current=n):
             yield line
 
@@ -258,6 +321,7 @@ def create_app(
         try:
             result = await look_up(session_id, lookup, "user")
         except ToolFailure as failure:
+            # look_up turns every failure of the file service into a ToolFailure.
             yield _line(type="error", message=str(failure))
             return
         if isinstance(result, Listing):
@@ -337,8 +401,10 @@ class _Workspace:
         components, data = compile_screen(screen)
         ids = {component["id"] for component in components}
         if self.ids and self.ids <= ids:
-            # Re-sending an unchanged data model would wipe what the user has typed.
-            messages = update(WORKSPACE_SURFACE, components, data if data != self.data else {})
+            # Only forms that are new or changed: re-sending one would wipe what
+            # the user has typed into it.
+            changed = {key: value for key, value in data.items() if self.data.get(key) != value}
+            messages = update(WORKSPACE_SURFACE, components, changed)
         else:
             messages = replace(WORKSPACE_SURFACE, components, data)
         lines = []

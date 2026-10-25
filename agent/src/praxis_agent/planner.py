@@ -37,6 +37,7 @@ from .tools.files import (
     ToolFailure,
     describe,
 )
+from .ui.a2ui import MAX_BLOCKS
 from .ui.plan import CardsBlock, CodeBlock, FormBlock, Screen, TextBlock, UIPlan
 
 # Lookups allowed before the model has to reply with what it has.
@@ -173,6 +174,8 @@ def compose(
         TextBlock(kind="text", style="caption", text=f"Not read: {reason}")
         for reason in dict.fromkeys(refused)
     ]
+    # A screen holds MAX_BLOCKS blocks. What the agent looked up is never what gets cut.
+    blocks = blocks[: max(0, MAX_BLOCKS - len(shown))]
     at = next(
         (i for i, block in enumerate(blocks) if isinstance(block, CardsBlock | FormBlock)),
         len(blocks),
@@ -253,16 +256,18 @@ async def plan(
         try:
             outcome = await lookup(step)
         except ToolFailure as failure:
+            # Refusals name the allowed folders; the model writes paths relative to the main one.
+            reason = str(failure).replace(main_folder, "the main folder")
             if failure.refused:
                 refused.append(str(failure))
                 ask = (
-                    f"{step.do} was refused: {failure}\n"
+                    f"{step.do} was refused: {reason}\n"
                     "The user has been told this. Do not say the file is missing.\n\n"
                     "Next step?"
                 )
             else:
                 ask = (
-                    f"{step.do} failed: {failure}\n"
+                    f"{step.do} failed: {reason}\n"
                     "If you are not sure of a path, search_files finds a file by name.\n\n"
                     "Next step?"
                 )

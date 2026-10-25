@@ -86,6 +86,21 @@ def test_a_stored_screen_comes_back_as_it_was(tmp_path):
     assert store.screen("other", 1) is None
 
 
+def test_turns_recorded_at_the_same_time_get_distinct_numbers(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    path = tmp_path / "c.db"
+    Conversations(path)
+
+    def write(i):
+        return record(Conversations(path), "s", turn(f"question {i}"))
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        numbers = list(pool.map(write, range(8)))
+
+    assert sorted(numbers) == list(range(1, 9))
+
+
 def test_a_new_conversation_has_no_history(tmp_path):
     store = Conversations(tmp_path / "c.db")
 

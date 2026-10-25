@@ -86,16 +86,15 @@ class Conversations:
     ) -> int:
         """Store a finished turn. Returns its number in the conversation, from 1."""
         with closing(self._connect()) as db, db:
-            (last,) = db.execute(
-                "SELECT COALESCE(MAX(n), 0) FROM turns WHERE session_id = ?", (session_id,)
-            ).fetchone()
-            db.execute(
+            # One statement, so two writers at once cannot both take the same number.
+            (n,) = db.execute(
                 "INSERT INTO turns"
                 " (session_id, n, at, label, title, mode, messages, screen, on_screen)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " SELECT ?, COALESCE(MAX(n), 0) + 1, ?, ?, ?, ?, ?, ?, ?"
+                " FROM turns WHERE session_id = ?"
+                " RETURNING n",
                 (
                     session_id,
-                    last + 1,
                     datetime.now(UTC).isoformat(timespec="seconds"),
                     label,
                     title,
@@ -103,9 +102,10 @@ class Conversations:
                     ModelMessagesTypeAdapter.dump_json(messages).decode(),
                     json.dumps(screen, ensure_ascii=False),
                     on_screen,
+                    session_id,
                 ),
-            )
-            return last + 1
+            ).fetchone()
+            return n
 
     def turns(self, session_id: str) -> list[TurnSummary]:
         with closing(self._connect()) as db:

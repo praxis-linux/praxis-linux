@@ -17,6 +17,9 @@ from typing import Any, Literal
 from mcp import Client, StdioServerParameters
 from pydantic import BaseModel, Field
 
+# A lookup that takes longer than this has failed. praxis-fs stops its own searches sooner.
+TOOL_TIMEOUT_SECONDS = 30.0
+
 # How much of a result the model is shown. The Canvas shows all of it.
 MODEL_ENTRIES = 30
 MODEL_FILE_CHARS = 4000
@@ -145,7 +148,9 @@ class FileTools:
         return str(parent) if inside and str(parent) != directory else None
 
     async def _call(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        result = await self._client.call_tool(tool, arguments)
+        result = await self._client.call_tool(
+            tool, arguments, read_timeout_seconds=TOOL_TIMEOUT_SECONDS
+        )
         if result.is_error:
             message = result.content[0].text if result.content else f"{tool} failed."
             raise ToolFailure(message.removeprefix(f"Error executing tool {tool}: "))
@@ -174,7 +179,8 @@ def describe(result: Listing | FileText, main_folder: str) -> str:
     """
 
     def short(path: str) -> str:
-        return relative(path, main_folder)
+        # One entry per line: a line break inside a file name must not start a new one.
+        return relative(path, main_folder).replace("\n", "\\n").replace("\r", "\\r")
 
     if isinstance(result, FileText):
         shown = result.content[:MODEL_FILE_CHARS]
@@ -189,7 +195,9 @@ def describe(result: Listing | FileText, main_folder: str) -> str:
     lines = [
         f"{short(entry.path)}/"
         if entry.kind == "directory"
-        else f"{short(entry.path)} ({human_size(entry.size)}, modified {entry.modified:%Y-%m-%d})"
+        # In local time, as the Canvas shows it: "today" means the user's today.
+        else f"{short(entry.path)} ({human_size(entry.size)}, "
+        f"modified {entry.modified.astimezone():%Y-%m-%d})"
         for entry in result.entries[:MODEL_ENTRIES]
     ]
     more = result.total - len(lines)
