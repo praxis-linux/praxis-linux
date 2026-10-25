@@ -29,13 +29,13 @@ This document is the single source of truth for project progress. Every status u
 - [x] **M0.6** — Backend agent service stood up (FastAPI + PydanticAI); Canvas renders its A2UI v0.9 output ([ADR-003](architecture/ADR-003-ui-wire-format.md))
 - [ ] **M0.7** — LiteLLM proxy wired to Ollama (local) ✅ and one cloud provider (Anthropic or OpenAI)
 - [x] **M0.8** — First MCP server (filesystem) integrated end-to-end — `praxis-fs`, read-only; write and move wait for M0.12
-- [ ] **M0.9** — Conversation mode functional (chat, streaming, memory)
+- [x] **M0.9** — Conversation mode functional (chat, streaming, memory) — conversations stored locally; long-term vector memory not started
 - [ ] **M0.10** — File mode functional (browse ✅, preview: text only so far, search via intent ✅)
 - [ ] **M0.11** — Code mode functional (open, edit, run a file with CodeMirror)
 - [ ] **M0.12** — Privacy guardrails: audit log ✅, cloud-call toast, kill switch hotkey
 - [ ] **M0.13** — 90-second demo video published; pre-launch post drafted
 
-**Phase 0 progress: 6 / 13 milestones complete (~46%).**
+**Phase 0 progress: 7 / 13 milestones complete (~54%).**
 
 ---
 
