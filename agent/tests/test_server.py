@@ -1556,3 +1556,12 @@ def test_the_kill_switch_stops_a_file_action_too(client, runner, home):
 
     assert stopped == {"stopped": 1}
     assert not worker.is_alive()
+
+
+def test_a_proposal_fenced_like_a_reply_is_unwrapped(client, model, home):
+    model.script = [propose("app.py", "```python\nprint('bye')\n```")]
+    apply = workspace(ask(client, "make it say bye"))["f0_apply"]["action"]["event"]
+
+    act(client, apply["name"], apply["context"])
+
+    assert (home / "app.py").read_bytes() == b"print('bye')\n"

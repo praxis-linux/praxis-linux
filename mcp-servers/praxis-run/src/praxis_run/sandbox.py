@@ -156,10 +156,16 @@ class Runner:
         file = self.files.resolve(path)
         if not file.is_file():
             raise AccessError(f"There is no file at {path}.")
-        interpreter = self._interpreters.get(file.suffix.lower())
+        suffix = file.suffix.lower()
+        interpreter = self._interpreters.get(suffix)
+        if interpreter is None and suffix in INTERPRETERS:
+            raise AccessError(
+                f"Praxis cannot run {LANGUAGES[suffix]} files here: "
+                f"{INTERPRETERS[suffix]} is not installed in a system folder."
+            )
         if interpreter is None:
-            kinds = ", ".join(LANGUAGES[suffix] for suffix in status.suffixes)
-            raise AccessError(f"Praxis can only run {kinds} files here.")
+            kinds = ", ".join(LANGUAGES[s] for s in INTERPRETERS)
+            raise AccessError(f"Praxis runs {kinds} files, and {file.name} is none of those.")
         masked = _to_mask(file.parent, hidden=not self.files.allow_hidden)
         if masked is None:
             raise AccessError(

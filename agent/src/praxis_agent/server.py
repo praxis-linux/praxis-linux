@@ -524,6 +524,10 @@ def create_app(
         else:
             old = ""
         new = proposal.content
+        # Small models sometimes fence the file's text as if it were a reply.
+        fenced = re.fullmatch(r"\s*```[^\n]*\n(.*?)\n?```\s*", new, flags=re.DOTALL)
+        if fenced:
+            new = fenced.group(1)
         # Models often drop the final line break; a file keeps ending as it did, and a
         # new file ends with one, like any text file.
         if new and not new.endswith("\n") and (current is None or old.endswith("\n")):

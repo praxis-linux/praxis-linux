@@ -293,7 +293,7 @@ async def test_long_output_is_cut_off(files, home, monkeypatch):
 async def test_only_known_kinds_of_file_are_run(files, home):
     (home / "code" / "notes.txt").write_text("hello", encoding="utf-8")
 
-    with pytest.raises(AccessError, match="can only run"):
+    with pytest.raises(AccessError, match="none of those"):
         await real_runner(files).run("code/notes.txt")
 
 
