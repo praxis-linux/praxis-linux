@@ -65,5 +65,7 @@ jobs:
           components: clippy, rustfmt
       - run: cargo fmt --check
         working-directory: canvas/src-tauri
-      - run: cargo clippy -- -D warnings
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: canvas/src-tauri
+      - run: cargo test
         working-directory: canvas/src-tauri

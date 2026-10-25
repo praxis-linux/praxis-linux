@@ -8,9 +8,11 @@ lint:
 	cd canvas && pnpm typecheck
 	# The Tauri build embeds canvas/dist, so it has to exist before cargo runs.
 	cd canvas && pnpm build
-	cd canvas/src-tauri && cargo fmt --check && cargo clippy -- -D warnings
+	cd canvas/src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings
 
 test:
 	cd mcp-servers/praxis-fs && uv run pytest
 	cd agent && uv run pytest
 	cd canvas && pnpm test
+	# Needs canvas/dist, which `make lint` builds.
+	cd canvas/src-tauri && cargo test
