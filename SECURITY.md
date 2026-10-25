@@ -4,7 +4,7 @@
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Email **security@praxislinux.dev** with:
+Report it privately through GitHub: **[Report a vulnerability](https://github.com/praxis-linux/praxis-linux/security/advisories/new)** (the repository's Security tab → "Report a vulnerability"). Only the maintainers see the report. Include:
 
 1. A description of the vulnerability and its potential impact
 2. Steps to reproduce (or a proof-of-concept)

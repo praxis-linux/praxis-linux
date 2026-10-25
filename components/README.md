@@ -4,13 +4,15 @@ The vetted component catalog the Praxis agent renders onto the Canvas.
 
 ## Status
 
-Placeholder. Component catalog lands with milestone **M0.5** — see [Roadmap](../docs/ROADMAP.md).
+The catalog that exists today lives in [`canvas/src/a2ui/catalog.tsx`](../canvas/src/a2ui/catalog.tsx): a vetted subset of the A2UI basic catalog (Text, Row, Column, List, Card, Tabs, Divider, Modal, Button, TextField, CheckBox, ChoicePicker, Slider, DateTimeInput). See [ADR-003](../docs/architecture/ADR-003-ui-wire-format.md).
+
+The Praxis-specific components below are planned, not built. They join the catalog as File mode (M0.10) and Code mode (M0.11) land — see [Roadmap](../docs/ROADMAP.md).
 
 ## Design principle
 
-The agent composes UI declaratively from this catalog — it never emits arbitrary HTML or CSS. This guarantees security (no code injection), accessibility (every component is WCAG-compliant), and visual consistency (every render looks like Praxis). Wire format: **A2UI v0.9**.
+The agent composes UI declaratively from this catalog — it never emits arbitrary HTML or CSS. The aims are security (no code injection), accessibility (every component WCAG-compliant), and visual consistency (every render looks like Praxis). Wire format: **A2UI v0.9**.
 
-## Component catalog v1
+## Planned Praxis components
 
 ### File
 
@@ -65,7 +67,7 @@ The agent composes UI declaratively from this catalog — it never emits arbitra
 | `<Image>` | Image viewer |
 | `<Video>` | Video player |
 
-## Planned structure (M0.5)
+## Planned structure
 
 ```
 components/

@@ -24,15 +24,32 @@ This repository is intentionally early. Star the repo to follow along.
 | Directory      | Purpose |
 |----------------|---------|
 | `canvas/`      | Tauri 2 + React desktop application — the Canvas |
-| `agent/`       | Python agent runtime (router, memory, MCP client) |
+| `agent/`       | Python agent runtime (router, planner, file lookups over MCP, conversation store, audit log) |
 | `mcp-servers/` | First-party Model Context Protocol servers |
-| `components/`  | A2UI component catalog the agent renders |
+| `components/`  | Planned Praxis components for the A2UI catalog |
 | `docs/`        | Architecture decisions and the roadmap |
 | `examples/`    | End-to-end demo flows |
 
 ## Quickstart (Phase 0 dev preview)
 
-> Not runnable yet. Setup instructions land with milestone **M0.5**. Watch this space.
+You need [Ollama](https://ollama.com), [uv](https://docs.astral.sh/uv/), Node 20+ (pnpm comes through `corepack`), and for the desktop window Rust with the [Tauri prerequisites](https://tauri.app/start/prerequisites/).
+
+```bash
+ollama pull qwen2.5:7b
+cd agent && uv sync && cd ..
+
+python scripts/dev.py          # model proxy, agent and the Canvas desktop window
+python scripts/dev.py --web    # or the Canvas in a browser, at http://localhost:1420
+python scripts/dev.py --wsl    # on Windows: everything in WSL, the window on your desktop
+```
+
+Ctrl+C stops everything.
+
+**On Windows**, the desktop window is easiest through WSL: `--wsl` copies your working tree into WSL (Ubuntu-24.04 unless you name another distro) and starts everything there. Ollama can stay on Windows; your API keys are passed across. Inside WSL you need Rust, uv, Node with corepack and the Tauri prerequisites for Linux. The agent then reads your WSL home folder, not your Windows one. Building natively on Windows also works, but not with Smart App Control on: it blocks the helper programs a Rust build compiles and runs. To run the pieces yourself, see [`agent/README.md`](agent/README.md) and [`canvas/README.md`](canvas/README.md).
+
+Type an intent in the bar at the bottom — try "what is in my Documents folder?". The agent answers from a local model. It can look at the files in your home folder, hidden ones excepted, and cannot change any of them.
+
+To use a cloud model instead, set `ANTHROPIC_API_KEY` and add `--model cloud-fast` (Claude Haiku) or `--model cloud-strong` (Claude Opus). The file names and contents the agent looks at then go to Anthropic, and the Canvas says so before each request.
 
 ## Architecture in one diagram
 
@@ -52,7 +69,7 @@ This repository is intentionally early. Star the repo to follow along.
 └─────────────────────────────────────────────────┘
 ```
 
-Detail: [`docs/architecture/ADR-001-strategic-positioning.md`](docs/architecture/ADR-001-strategic-positioning.md), [`docs/architecture/ADR-002-name-and-namespace.md`](docs/architecture/ADR-002-name-and-namespace.md)
+Detail: [`ADR-001` — strategic positioning](docs/architecture/ADR-001-strategic-positioning.md), [`ADR-002` — name and namespace](docs/architecture/ADR-002-name-and-namespace.md), [`ADR-003` — UI wire format](docs/architecture/ADR-003-ui-wire-format.md)
 
 ## Naming convention
 

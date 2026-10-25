@@ -12,38 +12,36 @@
 
 model_list:
   # ---- Local models (via Ollama) ----
+  # Ollama's address comes from OLLAMA_API_BASE, default http://localhost:11434.
+  # scripts/dev.py sets it, which matters under WSL, where Ollama may be on Windows.
   - model_name: local-fast
     litellm_params:
       model: ollama/qwen2.5:7b
-      api_base: http://localhost:11434
 
   - model_name: local-coder
     litellm_params:
       model: ollama/qwen2.5-coder:7b
-      api_base: http://localhost:11434
 
   - model_name: local-tiny
     # Used by the router for intent classification — must be fast
     litellm_params:
       model: ollama/qwen2.5:3b
-      api_base: http://localhost:11434
 
   - model_name: local-embed
     litellm_params:
       model: ollama/nomic-embed-text
-      api_base: http://localhost:11434
 
   # ---- Cloud models (BYO key) ----
   # Comment out any provider you don't use. Praxis never hard-codes a default cloud provider.
 
   - model_name: cloud-strong
     litellm_params:
-      model: anthropic/claude-opus-4-7
+      model: anthropic/claude-opus-5-5
       api_key: os.environ/ANTHROPIC_API_KEY
 
   - model_name: cloud-fast
     litellm_params:
-      model: anthropic/claude-haiku-4-5
+      model: anthropic/claude-haiku-5-5
       api_key: os.environ/ANTHROPIC_API_KEY
 
   # - model_name: cloud-strong

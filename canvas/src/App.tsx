@@ -1,51 +1,59 @@
-import { useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { MarkdownContext } from "@a2ui/react/v0_9";
 import WorkspaceLayer from "./layers/WorkspaceLayer";
 import IntentLayer from "./layers/IntentLayer";
 import ContextRail from "./layers/ContextRail";
-import type { A2UIPayload } from "./a2ui/types";
+import { renderAgentMarkdown } from "./a2ui/markdown";
+import { CanvasSession } from "./session";
 
-const INITIAL_PAYLOAD: A2UIPayload = {
-  mode: "conversation",
-  title: "Welcome to Praxis",
-  body: {
-    component: "Cards",
-    props: {
-      items: [
-        {
-          title: "Start a conversation",
-          description: "Ask anything — Praxis will figure out the right mode.",
-          icon: "💬",
-        },
-        {
-          title: "Browse your files",
-          description: 'Say "show me recent documents" to open File mode.',
-          icon: "📁",
-        },
-        {
-          title: "Write some code",
-          description: "Describe what you want to build and switch to Code mode.",
-          icon: "⚡",
-        },
-      ],
-    },
-  },
-};
+interface Props {
+  session?: CanvasSession;
+}
 
-export default function App() {
-  const [payload, setPayload] = useState<A2UIPayload>(INITIAL_PAYLOAD);
+export default function App({ session: provided }: Props) {
+  const [session] = useState(() => provided ?? new CanvasSession());
+  const state = useSyncExternalStore(session.subscribe, session.getState);
 
-  function handleIntent(intent: string) {
-    // M0.6: will send to agent service; for now reflect intent in title
-    setPayload((p) => ({ ...p, title: `"${intent}"` }));
-  }
+  // The kill switch: Esc, from anywhere in the window, stops the agent while it works.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !event.isComposing && session.getState().busy) {
+        event.preventDefault();
+        void session.stop();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [session]);
 
   return (
-    <div className="canvas-root">
-      <div className="canvas-main">
-        <WorkspaceLayer payload={payload} />
-        {payload.context && <ContextRail node={payload.context} />}
+    <MarkdownContext.Provider value={renderAgentMarkdown}>
+      <div className="canvas-root">
+        <div className="canvas-main">
+          <WorkspaceLayer
+            mode={state.mode}
+            surface={state.workspace}
+            status={state.busy ? state.status : null}
+            error={state.error}
+          />
+          {state.context && <ContextRail surface={state.context} />}
+        </div>
+        {state.notice && (
+          <div className={`notice ${state.notice.kind}`} aria-live="polite">
+            {state.notice.kind === "cloud" ? "☁ " : ""}
+            {state.notice.text}
+          </div>
+        )}
+        <IntentLayer
+          mode={state.mode}
+          call={state.call}
+          busy={state.busy}
+          onIntent={(intent) => session.sendIntent(intent)}
+          onStop={() => void session.stop()}
+          onNewConversation={() => session.newConversation()}
+          onForgetConversation={() => void session.forgetConversation()}
+        />
       </div>
-      <IntentLayer mode={payload.mode} onIntent={handleIntent} />
-    </div>
+    </MarkdownContext.Provider>
   );
 }

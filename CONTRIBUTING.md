@@ -25,10 +25,10 @@ Until we ship the M0.13 demo, the codebase will change shape often. Don't take i
 | Stack | Linter | Formatter |
 |---|---|---|
 | Rust (`canvas/src-tauri/`) | `clippy` | `rustfmt` |
-| TypeScript (`canvas/src/`) | `eslint` | `prettier` |
+| TypeScript (`canvas/src/`) | `tsc` (eslint not set up yet) | not set up yet |
 | Python (`agent/`) | `ruff` | `ruff format` |
 
-Run `make lint` before pushing (Makefile lands with M0.5).
+Run `make lint` and `make test` before pushing. CI runs the same checks on every pull request.
 
 ## Commits
 
@@ -40,7 +40,7 @@ By participating, you agree to uphold a basic standard of respectful, constructi
 
 ## Security
 
-Found a vulnerability? Don't open a public issue. Email the address listed in `SECURITY.md` (lands with M0.12).
+Found a vulnerability? Don't open a public issue. Report it privately as described in [`SECURITY.md`](SECURITY.md).
 
 ## Ownership
 

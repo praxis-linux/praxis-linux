@@ -1,0 +1,106 @@
+[
+  {
+    "version": "v0.9",
+    "deleteSurface": {
+      "surfaceId": "context"
+    }
+  },
+  {
+    "version": "v0.9",
+    "createSurface": {
+      "surfaceId": "context",
+      "catalogId": "praxis-linux:catalog:phase0"
+    }
+  },
+  {
+    "version": "v0.9",
+    "updateComponents": {
+      "surfaceId": "context",
+      "components": [
+        {
+          "id": "root",
+          "component": "Column",
+          "children": [
+            "trail_head",
+            "t1",
+            "t2"
+          ]
+        },
+        {
+          "id": "trail_head",
+          "component": "Text",
+          "text": "This conversation",
+          "variant": "caption"
+        },
+        {
+          "id": "t1_label",
+          "component": "Text",
+          "text": "plan a project",
+          "variant": "h5"
+        },
+        {
+          "id": "t1_title",
+          "component": "Text",
+          "text": "Plan a project",
+          "variant": "caption"
+        },
+        {
+          "id": "t1_body",
+          "component": "Column",
+          "children": [
+            "t1_label",
+            "t1_title"
+          ]
+        },
+        {
+          "id": "t1",
+          "component": "Button",
+          "variant": "borderless",
+          "child": "t1_body",
+          "action": {
+            "event": {
+              "name": "revisit",
+              "context": {
+                "turn": 1
+              }
+            }
+          }
+        },
+        {
+          "id": "t2_label",
+          "component": "Text",
+          "text": "▸ show my notes",
+          "variant": "h5"
+        },
+        {
+          "id": "t2_title",
+          "component": "Text",
+          "text": "notes.md",
+          "variant": "caption"
+        },
+        {
+          "id": "t2_body",
+          "component": "Column",
+          "children": [
+            "t2_label",
+            "t2_title"
+          ]
+        },
+        {
+          "id": "t2",
+          "component": "Button",
+          "variant": "borderless",
+          "child": "t2_body",
+          "action": {
+            "event": {
+              "name": "revisit",
+              "context": {
+                "turn": 2
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+]

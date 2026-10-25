@@ -9,6 +9,22 @@
   --text-secondary: #7878a0;
   --border:       #2e2e38;
   --radius:       8px;
+  --warn:         #e0a23a;
+
+  /* A2UI theme — the catalog components read these. */
+  color-scheme: dark;
+  --a2ui-color-background: var(--bg-base);
+  --a2ui-color-on-background: var(--text-primary);
+  --a2ui-color-surface: var(--bg-surface);
+  --a2ui-color-on-surface: var(--text-primary);
+  --a2ui-color-primary: var(--accent);
+  --a2ui-color-border: var(--border);
+  --a2ui-color-input: var(--bg-elevated);
+  --a2ui-color-on-input: var(--text-primary);
+  --a2ui-border-radius: var(--radius);
+  --a2ui-font-size: 14px;
+  --a2ui-grid-base: 12px;
+  --a2ui-font-family-monospace: "JetBrains Mono", "Cascadia Code", monospace;
 }
 
 /* ── Reset ──────────────────────────────────────────────────── */
@@ -56,11 +72,37 @@ html, body, #root {
   opacity: 0.7;
 }
 
-.workspace-title {
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--text-primary);
-  letter-spacing: -0.4px;
+.workspace-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.workspace-status {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* An image file, carried inline. */
+.file-image {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/* A link the agent wrote: shown with its address, never followed. */
+.agent-link { color: var(--accent); }
+
+.workspace-error {
+  max-width: 640px;
+  padding: 10px 14px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  color: var(--warn);
+  font-size: 13px;
 }
 
 /* ── IntentLayer ────────────────────────────────────────────── */
@@ -75,6 +117,45 @@ html, body, #root {
   flex-shrink: 0;
 }
 
+.intent-new {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.intent-new:hover { color: var(--text-primary); border-color: var(--accent-dim); }
+.intent-new.danger { color: var(--warn); border-color: var(--warn); }
+
+.intent-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.intent-submit.stop { background: var(--warn); }
+
+/* A short-lived notice above the intent bar: a cloud call, a stop, a deletion. */
+.notice {
+  position: fixed;
+  right: 16px;
+  bottom: 72px;
+  max-width: 420px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.notice.cloud { border-color: var(--warn); color: var(--warn); }
+
 .mode-badge {
   font-size: 11px;
   font-weight: 700;
@@ -87,6 +168,14 @@ html, body, #root {
   white-space: nowrap;
   user-select: none;
 }
+
+.model-badge {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  user-select: none;
+}
+.model-badge.cloud { color: var(--warn); font-weight: 600; }
 
 .intent-input {
   flex: 1;
@@ -126,96 +215,87 @@ html, body, #root {
   flex-shrink: 0;
 }
 
-/* ── A2UI · Cards ───────────────────────────────────────────── */
-.a2ui-cards {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-width: 640px;
-}
+/* ── A2UI surfaces ──────────────────────────────────────────── */
+.a2ui-host { max-width: 640px; line-height: 1.6; }
 
-.a2ui-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 18px;
-  cursor: default;
-  transition: border-color 0.15s, background 0.15s;
-}
+.a2ui-host h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; }
+.a2ui-host h3 { font-size: 18px; font-weight: 600; }
+.a2ui-host h4 { font-size: 15px; font-weight: 600; }
+.a2ui-host h5 { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.a2ui-host em { font-style: normal; font-size: 13px; color: var(--text-secondary); }
+.a2ui-host p + p,
+.a2ui-host ul,
+.a2ui-host ol { margin-top: 8px; }
+.a2ui-host ul,
+.a2ui-host ol { padding-left: 20px; }
 
-.a2ui-card:hover {
-  border-color: var(--accent-dim);
-  background: var(--bg-elevated);
-}
-
-.card-icon { font-size: 26px; line-height: 1; flex-shrink: 0; }
-
-.card-body { display: flex; flex-direction: column; gap: 5px; }
-
-.card-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.card-description {
-  font-size: 13px;
-  color: var(--text-secondary);
-  line-height: 1.55;
-}
-
-/* ── A2UI · Form ────────────────────────────────────────────── */
-.a2ui-form { display: flex; flex-direction: column; gap: 16px; max-width: 480px; }
-
-.form-field { display: flex; flex-direction: column; gap: 6px; }
-
-.form-field label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
-
-.form-field input,
-.form-field textarea {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text-primary);
-  font-size: 14px;
-  padding: 8px 12px;
-  outline: none;
-  transition: border-color 0.15s;
-  font-family: inherit;
-}
-
-.form-field input:focus,
-.form-field textarea:focus { border-color: var(--accent); }
-
-.form-field textarea { resize: vertical; min-height: 80px; }
-
-.a2ui-form button {
-  align-self: flex-start;
-  background: var(--accent);
-  border: none;
-  border-radius: var(--radius);
-  color: #fff;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 500;
-  padding: 8px 20px;
-  transition: opacity 0.15s;
-}
-.a2ui-form button:hover { opacity: 0.85; }
-
-/* ── A2UI · Text ────────────────────────────────────────────── */
-.a2ui-text    { color: var(--text-primary); line-height: 1.6; max-width: 640px; }
-.a2ui-heading { font-size: 20px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
-.a2ui-code {
+.a2ui-host code { font-family: var(--a2ui-font-family-monospace); font-size: 13px; }
+.a2ui-host pre {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 16px;
-  font-family: "JetBrains Mono", "Cascadia Code", monospace;
-  font-size: 13px;
+  margin-top: 8px;
   overflow-x: auto;
-  color: var(--text-primary);
 }
+
+/* Default buttons are the clickable cards; primary is a form's submit. */
+.praxis-button {
+  font: inherit;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius);
+  transition: border-color 0.15s, background 0.15s, opacity 0.15s;
+}
+.praxis-button.default {
+  width: 100%;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  padding: 18px;
+}
+.praxis-button.default:hover { border-color: var(--accent-dim); background: var(--bg-elevated); }
+.praxis-button.primary {
+  align-self: flex-start;
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  font-weight: 500;
+  padding: 8px 20px;
+}
+.praxis-button.primary:hover { opacity: 0.85; }
+/* Borderless buttons are rows: a file, a folder, or the way up. */
+.praxis-button.borderless {
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 6px 10px;
+}
+.praxis-button.borderless:hover { background: var(--bg-elevated); }
+.praxis-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.praxis-button:disabled { opacity: 0.5; cursor: default; }
+
+.a2ui-host label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.a2ui-host input[type="text"],
+.a2ui-host input[type="number"],
+.a2ui-host input[type="password"],
+.a2ui-host textarea {
+  width: 100%;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font: inherit;
+  padding: 8px 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.a2ui-host input:focus,
+.a2ui-host textarea:focus { border-color: var(--accent); }
+.a2ui-host textarea { resize: vertical; min-height: 80px; }

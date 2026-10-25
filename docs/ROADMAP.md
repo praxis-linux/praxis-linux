@@ -26,16 +26,16 @@ This document is the single source of truth for project progress. Every status u
 - [ ] **M0.3** — Public presence reserved: GitHub org (`praxis-linux`) ✅, X handle (`@PraxisLinux`), domain (`praxislinux.dev`)
 - [x] **M0.4** — Dev toolchain installed locally (Rust, Node, pnpm, Python, Ollama)
 - [x] **M0.5** — Tauri canvas app scaffolded and renders a minimal A2UI payload
-- [ ] **M0.6** — Backend agent service stood up (FastAPI + PydanticAI)
-- [ ] **M0.7** — LiteLLM proxy wired to Ollama (local) and one cloud provider (Anthropic or OpenAI)
-- [ ] **M0.8** — First MCP server (filesystem) integrated end-to-end
-- [ ] **M0.9** — Conversation mode functional (chat, streaming, memory)
-- [ ] **M0.10** — File mode functional (browse, preview, search via intent)
+- [x] **M0.6** — Backend agent service stood up (FastAPI + PydanticAI); Canvas renders its A2UI v0.9 output ([ADR-003](architecture/ADR-003-ui-wire-format.md))
+- [x] **M0.7** — LiteLLM proxy wired to Ollama (local) ✅ and one cloud provider (Anthropic or OpenAI) ✅ — Anthropic: `cloud-fast` (Claude Haiku 5.5) and `cloud-strong` (Claude Opus 5.5); one alias serves every turn, per-turn routing not yet
+- [x] **M0.8** — First MCP server (filesystem) integrated end-to-end — `praxis-fs`, read-only; write and move wait for M0.12
+- [x] **M0.9** — Conversation mode functional (chat, streaming, memory) — conversations stored locally; long-term vector memory not started
+- [x] **M0.10** — File mode functional (browse, preview, search via intent) — previews for text and images (PNG, JPEG, GIF, WebP); PDF previews not yet
 - [ ] **M0.11** — Code mode functional (open, edit, run a file with CodeMirror)
-- [ ] **M0.12** — Privacy guardrails: audit log, cloud-call toast, kill switch hotkey
+- [x] **M0.12** — Privacy guardrails: audit log, cloud-call toast, kill switch hotkey (Esc, in the Canvas window; a system-wide hotkey comes with the Phase 1 session), deleting a conversation
 - [ ] **M0.13** — 90-second demo video published; pre-launch post drafted
 
-**Phase 0 progress: 4 / 13 milestones complete (~31%).**
+**Phase 0 progress: 10 / 13 milestones complete (~77%).**
 
 ---
 

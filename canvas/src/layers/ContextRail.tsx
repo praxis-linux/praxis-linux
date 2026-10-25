@@ -1,14 +1,14 @@
-import type { A2UINode } from "../a2ui/types";
-import { Renderer } from "../a2ui/Renderer";
+import { A2uiSurface } from "@a2ui/react/v0_9";
+import type { Surface } from "../session";
 
 interface Props {
-  node: A2UINode;
+  surface: Surface;
 }
 
-export default function ContextRail({ node }: Props) {
+export default function ContextRail({ surface }: Props) {
   return (
-    <aside className="context-rail">
-      <Renderer node={node} />
+    <aside className="context-rail a2ui-host">
+      <A2uiSurface surface={surface} />
     </aside>
   );
 }

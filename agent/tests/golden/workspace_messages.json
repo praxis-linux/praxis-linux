@@ -1,0 +1,335 @@
+[
+  {
+    "version": "v0.9",
+    "deleteSurface": {
+      "surfaceId": "workspace"
+    }
+  },
+  {
+    "version": "v0.9",
+    "createSurface": {
+      "surfaceId": "workspace",
+      "catalogId": "praxis-linux:catalog:phase0"
+    }
+  },
+  {
+    "version": "v0.9",
+    "updateComponents": {
+      "surfaceId": "workspace",
+      "components": [
+        {
+          "id": "root",
+          "component": "Column",
+          "children": [
+            "title",
+            "up",
+            "b0",
+            "b1",
+            "b2",
+            "b3",
+            "f0",
+            "f1",
+            "f2"
+          ]
+        },
+        {
+          "id": "title",
+          "component": "Text",
+          "text": "Plan a project",
+          "variant": "h2"
+        },
+        {
+          "id": "up_label",
+          "component": "Text",
+          "text": "↑ ada",
+          "variant": "h5"
+        },
+        {
+          "id": "up",
+          "component": "Button",
+          "variant": "borderless",
+          "child": "up_label",
+          "action": {
+            "event": {
+              "name": "open",
+              "context": {
+                "target": "/home/ada",
+                "kind": "directory"
+              }
+            }
+          }
+        },
+        {
+          "id": "b0",
+          "component": "Text",
+          "text": "Tell me about the **project**.",
+          "variant": "body"
+        },
+        {
+          "id": "b1_f_project_name",
+          "component": "TextField",
+          "label": "Project name",
+          "value": {
+            "path": "/b1/project_name"
+          },
+          "variant": "shortText"
+        },
+        {
+          "id": "b1_f_goal",
+          "component": "TextField",
+          "label": "Goal",
+          "value": {
+            "path": "/b1/goal"
+          },
+          "variant": "longText"
+        },
+        {
+          "id": "b1_submit_label",
+          "component": "Text",
+          "text": "Continue"
+        },
+        {
+          "id": "b1_submit",
+          "component": "Button",
+          "variant": "primary",
+          "child": "b1_submit_label",
+          "action": {
+            "event": {
+              "name": "submit",
+              "context": {
+                "purpose": "Gather project details",
+                "values": {
+                  "path": "/b1"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "b1",
+          "component": "Column",
+          "children": [
+            "b1_f_project_name",
+            "b1_f_goal",
+            "b1_submit"
+          ]
+        },
+        {
+          "id": "b2_c0_title",
+          "component": "Text",
+          "text": "See an example",
+          "variant": "h4"
+        },
+        {
+          "id": "b2_c0_desc",
+          "component": "Text",
+          "text": "A filled-in plan",
+          "variant": "caption"
+        },
+        {
+          "id": "b2_c0_body",
+          "component": "Column",
+          "children": [
+            "b2_c0_title",
+            "b2_c0_desc"
+          ]
+        },
+        {
+          "id": "b2_c0",
+          "component": "Button",
+          "child": "b2_c0_body",
+          "action": {
+            "event": {
+              "name": "intent",
+              "context": {
+                "text": "Show me an example project plan"
+              }
+            }
+          }
+        },
+        {
+          "id": "b2_c1_title",
+          "component": "Text",
+          "text": "Start over",
+          "variant": "h4"
+        },
+        {
+          "id": "b2_c1_body",
+          "component": "Column",
+          "children": [
+            "b2_c1_title"
+          ]
+        },
+        {
+          "id": "b2_c1",
+          "component": "Button",
+          "child": "b2_c1_body",
+          "action": {
+            "event": {
+              "name": "intent",
+              "context": {
+                "text": "Start a new conversation"
+              }
+            }
+          }
+        },
+        {
+          "id": "b2",
+          "component": "Column",
+          "children": [
+            "b2_c0",
+            "b2_c1"
+          ]
+        },
+        {
+          "id": "b3",
+          "component": "Text",
+          "text": "```python\nprint(\"hello\")\nprint(\"world\")\n```",
+          "variant": "body"
+        },
+        {
+          "id": "f0_head",
+          "component": "Text",
+          "text": "/home/ada/projects · 2 items",
+          "variant": "caption"
+        },
+        {
+          "id": "f0_e0_name",
+          "component": "Text",
+          "text": "praxis/",
+          "variant": "h5"
+        },
+        {
+          "id": "f0_e0_meta",
+          "component": "Text",
+          "text": "folder",
+          "variant": "caption"
+        },
+        {
+          "id": "f0_e0_row",
+          "component": "Row",
+          "children": [
+            "f0_e0_name",
+            "f0_e0_meta"
+          ],
+          "justify": "spaceBetween",
+          "align": "center"
+        },
+        {
+          "id": "f0_e0",
+          "component": "Button",
+          "variant": "borderless",
+          "child": "f0_e0_row",
+          "action": {
+            "event": {
+              "name": "open",
+              "context": {
+                "target": "/home/ada/projects/praxis",
+                "kind": "directory"
+              }
+            }
+          }
+        },
+        {
+          "id": "f0_e1_name",
+          "component": "Text",
+          "text": "__init__.py",
+          "variant": "h5"
+        },
+        {
+          "id": "f0_e1_meta",
+          "component": "Text",
+          "text": "2.0 KB · 2026-09-29 14:05",
+          "variant": "caption"
+        },
+        {
+          "id": "f0_e1_row",
+          "component": "Row",
+          "children": [
+            "f0_e1_name",
+            "f0_e1_meta"
+          ],
+          "justify": "spaceBetween",
+          "align": "center"
+        },
+        {
+          "id": "f0_e1",
+          "component": "Button",
+          "variant": "borderless",
+          "child": "f0_e1_row",
+          "action": {
+            "event": {
+              "name": "open",
+              "context": {
+                "target": "/home/ada/projects/__init__.py",
+                "kind": "file"
+              }
+            }
+          }
+        },
+        {
+          "id": "f0",
+          "component": "Column",
+          "children": [
+            "f0_head",
+            "f0_e0",
+            "f0_e1"
+          ]
+        },
+        {
+          "id": "f1_head",
+          "component": "Text",
+          "text": "/home/ada/projects/notes.md · 27 bytes",
+          "variant": "caption"
+        },
+        {
+          "id": "f1_text",
+          "component": "Text",
+          "text": "```md\n# Notes\n\n- *ship* the demo\n\n```",
+          "variant": "body"
+        },
+        {
+          "id": "f1",
+          "component": "Column",
+          "children": [
+            "f1_head",
+            "f1_text"
+          ]
+        },
+        {
+          "id": "f2_head",
+          "component": "Text",
+          "text": "/home/ada/projects/pixel.png · 70 bytes",
+          "variant": "caption"
+        },
+        {
+          "id": "f2_image",
+          "component": "FileImage",
+          "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+          "description": "pixel.png"
+        },
+        {
+          "id": "f2",
+          "component": "Column",
+          "children": [
+            "f2_head",
+            "f2_image"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "version": "v0.9",
+    "updateDataModel": {
+      "surfaceId": "workspace",
+      "path": "/",
+      "value": {
+        "b1": {
+          "project_name": "",
+          "goal": ""
+        }
+      }
+    }
+  }
+]

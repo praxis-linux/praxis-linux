@@ -1,18 +1,35 @@
-import type { A2UIPayload } from "../a2ui/types";
-import { Renderer } from "../a2ui/Renderer";
+import { A2uiSurface } from "@a2ui/react/v0_9";
+import type { Mode } from "../agent/client";
+import type { Surface } from "../session";
 
 interface Props {
-  payload: A2UIPayload;
+  mode: Mode;
+  surface: Surface | undefined;
+  /** What the agent is doing, while it works. */
+  status: string | null;
+  error: string | null;
 }
 
-export default function WorkspaceLayer({ payload }: Props) {
+export default function WorkspaceLayer({ mode, surface, status, error }: Props) {
   return (
     <div className="workspace-layer">
-      <div className="workspace-mode">{payload.mode}</div>
-      {payload.title && (
-        <div className="workspace-title">{payload.title}</div>
+      <div className="workspace-head">
+        <span className="workspace-mode">{mode}</span>
+        {/* Always rendered, so screen readers announce each new status. */}
+        <span className="workspace-status" role="status">
+          {status}
+        </span>
+      </div>
+      {error && (
+        <div className="workspace-error" role="alert">
+          {error}
+        </div>
       )}
-      <Renderer node={payload.body} />
+      {surface && (
+        <div className="a2ui-host">
+          <A2uiSurface surface={surface} />
+        </div>
+      )}
     </div>
   );
 }
