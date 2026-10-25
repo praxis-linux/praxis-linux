@@ -33,6 +33,8 @@ MAX_SCANNED = 50_000
 MAX_READ_BYTES = 64_000
 MAX_IMAGE_BYTES = 8_000_000
 MAX_WRITE_BYTES = 1_000_000
+# How long a write can be undone.
+BACKUP_DAYS = 30
 SEARCH_SECONDS = 10.0
 MAX_DAYS = 36_500
 
@@ -272,7 +274,14 @@ class Files:
             raise AccessError(
                 f"No copy of {path} could be kept to undo with, so it was not changed."
             ) from error
-        _replace(file, data)
+        try:
+            _put(file, data, create=old is None)
+        except BaseException as error:
+            # Nothing was written, so there is nothing to undo.
+            shutil.rmtree(self.backups / backup, ignore_errors=True)
+            if isinstance(error, OSError):
+                raise AccessError(f"{path} could not be written ({error.strerror}).") from error
+            raise
         return Written(
             path=str(file), size=len(data), sha256=written, created=old is None, backup=backup
         )
@@ -296,20 +305,31 @@ class Files:
         if record["created"]:
             file.unlink()
         else:
-            _replace(file, (folder / "original").read_bytes())
+            _put(file, (folder / "original").read_bytes(), create=False)
         shutil.rmtree(folder, ignore_errors=True)
         return Undone(path=str(file), removed=record["created"])
 
     def _back_up(self, file: Path, old: bytes | None, written: str) -> str:
         """Keep `old`, what `file` held before a write, under a new backup id."""
+        # Backups hold old versions of the user's files: only the user may read them.
+        self.backups.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.backups.mkdir(exist_ok=True, mode=0o700)
+        self._prune()
         backup = f"{time.strftime('%Y%m%dT%H%M%S')}-{secrets.token_hex(4)}"
         folder = self.backups / backup
-        folder.mkdir(parents=True, mode=0o700)
+        folder.mkdir(mode=0o700)
         if old is not None:
             (folder / "original").write_bytes(old)
         record = {"path": str(file), "sha256": written, "created": old is None}
         (folder / "write.json").write_text(json.dumps(record), encoding="utf-8")
         return backup
+
+    def _prune(self) -> None:
+        """Forget backups older than BACKUP_DAYS: they keep old file contents, secrets too."""
+        oldest = time.strftime("%Y%m%dT%H%M%S", time.localtime(time.time() - BACKUP_DAYS * 86_400))
+        for folder in self.backups.iterdir():
+            if _BACKUP_ID.fullmatch(folder.name) and folder.name < oldest:
+                shutil.rmtree(folder, ignore_errors=True)
 
     def read_image(self, path: str) -> ImageFile:
         """An image file's bytes, for showing it. Only PNG, JPEG, GIF and WebP, judged by
@@ -404,17 +424,58 @@ def _is_utf8(data: bytes) -> bool:
     return True
 
 
-def _replace(file: Path, data: bytes) -> None:
-    """Make `file` hold `data` in one step: a reader sees the old file or the new, never half."""
-    temporary = file.with_name(f".{file.name}.praxis-{secrets.token_hex(4)}")
+# What a new file's permissions are cut down by, as for any other program. Read once.
+_UMASK = os.umask(0o022)
+os.umask(_UMASK)
+
+_EXCLUSIVE = (
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+)
+
+
+def _put(file: Path, data: bytes, *, create: bool) -> None:
+    """Make `file` hold `data` in one step: a reader sees the old file or the new, never half.
+
+    With `create` the file must not exist, and one that appears meanwhile is left
+    alone: a rename would overwrite it, a link does not.
+    """
+    temporary = file.with_name(f".{file.name}.praxis-{secrets.token_hex(8)}")
+    # Private until it is in place, since the text may be secret; never through a link.
+    descriptor = os.open(temporary, _EXCLUSIVE, 0o600)
     try:
-        temporary.write_bytes(data)
-        if file.exists():
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if not create:
             shutil.copymode(file, temporary)
-        os.replace(temporary, file)
+            os.replace(temporary, file)
+            return
+        os.chmod(temporary, 0o666 & ~_UMASK)
+        try:
+            os.link(temporary, file)
+        except FileExistsError as error:
+            raise AccessError(
+                f"{file.name} appeared while it was being created, so it was not overwritten."
+            ) from error
+        except OSError:
+            # No hard links here (some network and FAT file systems): create it in place.
+            _create_in_place(file, data)
+        temporary.unlink()
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
+
+
+def _create_in_place(file: Path, data: bytes) -> None:
+    try:
+        descriptor = os.open(file, _EXCLUSIVE, 0o666)
+    except FileExistsError as error:
+        raise AccessError(
+            f"{file.name} appeared while it was being created, so it was not overwritten."
+        ) from error
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(data)
 
 
 def _image_type(head: bytes) -> str | None:

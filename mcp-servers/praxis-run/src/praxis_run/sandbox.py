@@ -1,15 +1,16 @@
 """Running a file the user picked, inside a bubblewrap sandbox.
 
 What the code can reach: the system's programs and libraries, read-only; a few
-files from /etc that programs need to start; a private /tmp; and its own folder,
-where it may write, unless that folder is one of the allowed folders itself (the
-home folder, usually), which it may only read. Hidden files and folders directly in
-its folder are masked.
+files from /etc that programs need to start; a private /tmp it may write to; and
+its own folder, which it may read but never change. Where bubblewrap can lay a
+throwaway layer over that folder (`--tmp-overlay`, bubblewrap 0.10 and later), the
+code may write there too, and what it writes is gone when it ends. Hidden files and
+folders anywhere in its folder are masked, and so are sockets.
 
 What it cannot reach: the network, the rest of the home folder, other drives
 (/mnt, /media), /run (and with it the user's session and D-Bus), and any process
-outside the sandbox. A run is stopped after RUN_SECONDS, and what it prints is
-cut off after MAX_OUTPUT bytes.
+outside the sandbox. It cannot make user namespaces of its own. A run is stopped
+after RUN_SECONDS, and what it prints is cut off after MAX_OUTPUT bytes.
 
 Not limited: memory, and how many processes the code starts. Those need cgroups,
 which come with the Phase 1 session.
@@ -19,16 +20,19 @@ import asyncio
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from praxis_fs.fs import AccessError, Files
+from praxis_fs.fs import SKIPPED_DIRECTORIES, AccessError, Files
 from pydantic import BaseModel
 
 RUN_SECONDS = 10.0
 MAX_OUTPUT = 64_000
+# How many entries of a file's folder are checked for things to mask before it runs.
+MAX_CHECKED = 20_000
 
 # What runs a file, by its suffix.
 INTERPRETERS = {".py": "python3", ".sh": "bash", ".js": "node"}
@@ -75,28 +79,40 @@ class RunResult(BaseModel):
     seconds: float
 
 
+def base_command(bwrap: str, *, disable_userns: bool) -> list[str]:
+    """A sandbox with nothing in it but the system, /dev, /proc and an empty /tmp."""
+    command = [bwrap, "--unshare-all", "--die-with-parent", "--new-session"]
+    if disable_userns:
+        command += ["--unshare-user", "--disable-userns"]
+    for path in SYSTEM + ETC:
+        command += ["--ro-bind-try", path, path]
+    return command + ["--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]
+
+
 def sandbox_command(
     bwrap: str,
     interpreter: str,
     file: str,
     *,
-    writable: bool,
-    hidden: list[tuple[str, bool]],
+    masked: list[tuple[str, bool]],
+    overlay: bool,
+    disable_userns: bool = True,
 ) -> list[str]:
     """The bwrap command that runs `file` with `interpreter`.
 
-    `writable`: whether the file's folder may be written to. `hidden`: the hidden
-    entries directly in that folder, as (path, is_folder), which are masked.
+    `masked`: what in the file's folder is hidden from the code, as (path, is_folder).
+    `overlay`: whether the code may write in its folder, to a layer that is thrown
+    away when it ends; otherwise the folder is read-only.
     """
     folder = os.path.dirname(file)
-    command = [bwrap, "--unshare-all", "--die-with-parent", "--new-session"]
-    for path in SYSTEM + ETC:
-        command += ["--ro-bind-try", path, path]
-    command += ["--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]
-    command += ["--bind" if writable else "--ro-bind", folder, folder]
-    for path, is_folder in hidden:
+    command = base_command(bwrap, disable_userns=disable_userns)
+    if overlay:
+        command += ["--overlay-src", folder, "--tmp-overlay", folder]
+    else:
+        command += ["--ro-bind", folder, folder]
+    for path, is_folder in masked:
         command += ["--tmpfs", path] if is_folder else ["--ro-bind", "/dev/null", path]
-    command += [
+    return command + [
         "--chdir",
         folder,
         "--clearenv",
@@ -116,7 +132,6 @@ def sandbox_command(
         interpreter,
         file,
     ]
-    return command
 
 
 class Runner:
@@ -125,9 +140,11 @@ class Runner:
         self.bwrap = bwrap if bwrap is not None else shutil.which("bwrap")
         self._status: Status | None = None
         self._interpreters: dict[str, str] = {}
+        self._overlay = False
+        self._disable_userns = False
 
     def status(self) -> Status:
-        """Whether files can be run here, and which. Checked once, by starting a sandbox."""
+        """Whether files can be run here, and which. Checked once, by starting sandboxes."""
         if self._status is None:
             self._status = self._check()
         return self._status
@@ -143,14 +160,20 @@ class Runner:
         if interpreter is None:
             kinds = ", ".join(LANGUAGES[suffix] for suffix in status.suffixes)
             raise AccessError(f"Praxis can only run {kinds} files here.")
+        masked = _to_mask(file.parent, hidden=not self.files.allow_hidden)
+        if masked is None:
+            raise AccessError(
+                f"The folder {file.parent.name} holds too many files for Praxis to check "
+                "before running something in it. Move the file into a smaller folder."
+            )
 
-        folder = file.parent
         command = sandbox_command(
             self.bwrap or "bwrap",
             interpreter,
             str(file),
-            writable=folder not in self.files.roots,
-            hidden=[] if self.files.allow_hidden else _hidden_in(folder),
+            masked=masked,
+            overlay=self._overlay,
+            disable_userns=self._disable_userns,
         )
         started = time.monotonic()
         process = await asyncio.create_subprocess_exec(
@@ -186,52 +209,106 @@ class Runner:
         )
 
     def _check(self) -> Status:
+        def unavailable(reason: str) -> Status:
+            return Status(available=False, reason=reason, suffixes=[])
+
         if not sys.platform.startswith("linux"):
-            return Status(available=False, reason="Running code needs Linux.", suffixes=[])
+            return unavailable("Running code needs Linux.")
         if not self.bwrap:
-            return Status(
-                available=False,
-                reason=(
-                    "Running code needs bubblewrap, which is not installed. "
-                    "On Ubuntu: sudo apt install bubblewrap"
-                ),
-                suffixes=[],
+            return unavailable(
+                "Running code needs bubblewrap, which is not installed. "
+                "On Ubuntu: sudo apt install bubblewrap"
             )
         system = [os.path.realpath(path) for path in SYSTEM if os.path.isdir(path)]
-        for suffix, name in INTERPRETERS.items():
-            found = shutil.which(name)
-            # By its real path, and only if the sandbox can see it: one in a virtual
-            # environment or the home folder is not mounted.
-            real = os.path.realpath(found) if found else ""
-            if real and any(real.startswith(f"{d}/") for d in system):
-                self._interpreters[suffix] = real
-        probe = [self.bwrap, "--unshare-all", "--die-with-parent"]
-        for path in SYSTEM:
-            probe += ["--ro-bind-try", path, path]
-        probe += ["--", "/bin/true"]
+        # The system folders are shown to the code whole: none of the user's may be in one.
+        for place in [*self.files.roots, Path.home()]:
+            real = os.path.realpath(place)
+            shown = next((d for d in system if real == d or _inside(real, [d])), None)
+            if real == "/" or shown:
+                return unavailable(
+                    f"Running code is turned off: {place} is inside {shown or '/'}, "
+                    "which the sandbox shows to the code it runs."
+                )
+
         try:
-            result = subprocess.run(probe, capture_output=True, text=True, timeout=10)
+            usage = subprocess.run(
+                [self.bwrap, "--help"], capture_output=True, text=True, timeout=10
+            ).stdout
         except (OSError, subprocess.TimeoutExpired) as error:
-            detail = str(error)
-        else:
-            if result.returncode == 0:
-                return Status(available=True, reason="", suffixes=list(self._interpreters))
-            detail = result.stderr.strip() or f"exit code {result.returncode}"
-        return Status(
-            available=False,
-            reason=f"bubblewrap could not start a sandbox here ({detail[:200]}).",
-            suffixes=[],
-        )
+            return unavailable(f"bubblewrap could not be started ({error}).")
+        self._overlay = "--tmp-overlay" in usage
+        self._disable_userns = "--disable-userns" in usage
+
+        base = base_command(self.bwrap, disable_userns=self._disable_userns)
+        if not _succeeds([*base, "--", "/bin/true"]):
+            # Retry without the nested-namespace guard, which some kernels refuse.
+            self._disable_userns = False
+            base = base_command(self.bwrap, disable_userns=False)
+            if not _succeeds([*base, "--", "/bin/true"]):
+                return unavailable(
+                    "bubblewrap could not start a sandbox here. Some systems only let "
+                    "programs with an AppArmor profile create the namespaces it needs."
+                )
+        # Looked for only where the sandbox can see: not in a virtual environment
+        # or the home folder, which may come first on PATH.
+        search = [d for d in os.environ.get("PATH", "").split(os.pathsep) if _inside(d, SYSTEM)]
+        search = os.pathsep.join([*search, "/usr/local/bin", "/usr/bin", "/bin"])
+        for suffix, name in INTERPRETERS.items():
+            found = shutil.which(name, path=search)
+            # Run as found, so programs that look at the name they were started by
+            # work; but only if both the name and what it points to are in the sandbox.
+            if (
+                found
+                and _inside(found, SYSTEM)
+                and _inside(os.path.realpath(found), system)
+                and _succeeds([*base, "--", found, "--version"])
+            ):
+                self._interpreters[suffix] = found
+        return Status(available=True, reason="", suffixes=list(self._interpreters))
 
 
-def _hidden_in(folder: Path) -> list[tuple[str, bool]]:
-    """The hidden entries directly in `folder`, to be masked. Links are left alone:
-    what they point to is only reachable if it is in the folder anyway."""
-    hidden = []
-    for entry in os.scandir(folder):
-        if entry.name.startswith(".") and not entry.is_symlink():
-            hidden.append((entry.path, entry.is_dir(follow_symlinks=False)))
-    return hidden
+def _inside(path: str, folders: list[str]) -> bool:
+    return any(path.startswith(folder.rstrip("/") + "/") for folder in folders)
+
+
+def _succeeds(command: list[str]) -> bool:
+    try:
+        return subprocess.run(command, capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _to_mask(folder: Path, *, hidden: bool) -> list[tuple[str, bool]] | None:
+    """What in `folder`, at any depth, the code must not see: hidden entries (if
+    `hidden`) and sockets, as (path, is_folder). None if there is too much to check.
+
+    Links are left alone: what they point to is only reachable if it is in the
+    folder anyway, where it is checked itself.
+    """
+    masked: list[tuple[str, bool]] = []
+    pending = [str(folder)]
+    checked = 0
+    while pending:
+        try:
+            with os.scandir(pending.pop()) as entries:
+                found = list(entries)
+        except OSError:
+            continue
+        for entry in found:
+            checked += 1
+            if checked > MAX_CHECKED:
+                return None
+            if entry.is_symlink():
+                continue
+            is_folder = entry.is_dir(follow_symlinks=False)
+            if hidden and entry.name.startswith("."):
+                masked.append((entry.path, is_folder))
+            elif is_folder:
+                if entry.name not in SKIPPED_DIRECTORIES:
+                    pending.append(entry.path)
+            elif stat.S_ISSOCK(entry.stat(follow_symlinks=False).st_mode):
+                masked.append((entry.path, False))
+    return masked
 
 
 def _limits() -> None:

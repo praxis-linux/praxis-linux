@@ -662,7 +662,7 @@ test("a file opens in an editor holding its text", async () => {
 test("a proposed change's lines are marked as added or removed, as text", async () => {
   await showCode();
 
-  const diff = document.querySelector("code.language-diff")!;
+  const diff = document.querySelector("code.language-praxis-diff")!;
   expect(diff.querySelector(".diff-del")?.textContent).toBe("-print('hi')\n");
   expect(diff.querySelector(".diff-add")?.textContent).toBe("+print('bye')\n");
   expect(diff.querySelectorAll(".diff-file")).toHaveLength(2);
@@ -720,4 +720,18 @@ test("an editor whose text comes from a function the catalog leaves out is refus
 
   await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/not|could/i));
   expect(screen.queryByLabelText("Editing app.py")).toBeNull();
+});
+
+test("an agent that does not recognise this Canvas says so in plain words", async () => {
+  vi.stubGlobal("fetch", async (url: string) =>
+    new URL(url).pathname === "/resume" ? ndjson([]) : new Response("no", { status: 401 }),
+  );
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+
+  await submitIntent("hello");
+
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "The agent did not recognise this Canvas. Restart Praxis.",
+  );
 });

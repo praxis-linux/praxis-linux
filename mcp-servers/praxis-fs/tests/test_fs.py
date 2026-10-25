@@ -562,3 +562,56 @@ def test_backups_default_to_the_praxis_folder(monkeypatch, tmp_path):
     assert fs.backups_from_env() == Path.home() / ".praxis" / "backups"
     monkeypatch.setenv("PRAXIS_FS_BACKUPS", str(tmp_path))
     assert fs.backups_from_env() == tmp_path
+
+
+# --- Writing, when something goes wrong or happens meanwhile ---
+
+
+def test_a_file_that_appears_while_being_created_is_left_alone(files, home, monkeypatch, tmp_path):
+    back_up = Files._back_up
+
+    def meanwhile(self, file, old, written):
+        backup = back_up(self, file, old, written)
+        file.write_text("someone else's", encoding="utf-8")
+        return backup
+
+    monkeypatch.setattr(Files, "_back_up", meanwhile)
+
+    with pytest.raises(AccessError, match="appeared while it was being created"):
+        files.write_text_file("code/new.py", "mine")
+    assert (home / "code" / "new.py").read_text(encoding="utf-8") == "someone else's"
+    # Nothing was written, so nothing is left to undo.
+    assert list((tmp_path / "backups").iterdir()) == []
+
+
+def test_a_write_that_fails_leaves_no_backup_and_says_why(files, home, monkeypatch, tmp_path):
+    def broken(file, data, *, create):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(fs, "_put", broken)
+
+    with pytest.raises(AccessError, match=r"could not be written \(Permission denied\)"):
+        files.write_text_file("code/app.py", "x", files.read_text_file("code/app.py").sha256)
+    assert list((tmp_path / "backups").iterdir()) == []
+    assert (home / "code" / "app.py").read_text(encoding="utf-8") == "print('hi')"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions")
+def test_a_new_file_gets_the_usual_permissions_and_backups_are_private(files, home, tmp_path):
+    files.write_text_file("code/new.py", "x")
+
+    umask = os.umask(0)
+    os.umask(umask)
+    assert (home / "code" / "new.py").stat().st_mode & 0o777 == 0o666 & ~umask
+    assert (tmp_path / "backups").stat().st_mode & 0o777 == 0o700
+
+
+def test_old_backups_are_forgotten(files, home, tmp_path):
+    old = tmp_path / "backups" / "20000101T000000-0a1b2c3d"
+    old.mkdir(parents=True)
+    (old / "write.json").write_text("{}", encoding="utf-8")
+
+    files.write_text_file("code/new.py", "x")
+
+    assert not old.exists()
+    assert len(list((tmp_path / "backups").iterdir())) == 1

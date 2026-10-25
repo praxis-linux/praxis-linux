@@ -106,10 +106,12 @@ html, body, #root {
 .code-editor .cm-scroller { overflow: auto; }
 
 /* A proposed change, before the user applies it. */
-code.language-diff .diff-add  { color: #7ee2a8; background: rgba(46, 160, 67, 0.15); }
-code.language-diff .diff-del  { color: #ff9b9b; background: rgba(248, 81, 73, 0.15); }
-code.language-diff .diff-hunk { color: var(--text-secondary); }
-code.language-diff .diff-file { color: var(--text-secondary); }
+code.language-praxis-diff .diff-add  { color: #7ee2a8; background: rgba(46, 160, 67, 0.15); }
+code.language-praxis-diff .diff-del  { color: #ff9b9b; background: rgba(248, 81, 73, 0.15); }
+code.language-praxis-diff .diff-hunk { color: var(--text-secondary); }
+code.language-praxis-diff .diff-file { color: var(--text-secondary); }
+/* Wrapped, so nothing can hide at the end of a long line. */
+code.language-praxis-diff { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .workspace-error {
   max-width: 640px;

@@ -23,8 +23,8 @@ Paths may be absolute, start with `~`, or be relative to the main folder. An emp
 ## Writing
 
 - **Never blind.** A change needs the hash the file had when it was read, so a file changed since (by the user, or another program) is not overwritten. A new file is only created where none exists, in a folder that already exists.
-- **Always undoable.** Before each write, what it replaces is kept in `~/.praxis/backups/<id>/`, which `praxis-fs` will not read. Nothing removes old backups yet.
-- **Whole or not at all.** The new text is written to a temporary file beside the old one, which then replaces it in one step. A file that used CRLF line endings keeps them, and an executable stays executable.
+- **Always undoable.** Before each write, what it replaces is kept in `~/.praxis/backups/<id>/`, which `praxis-fs` will not read and only you may (`0700`). Backups older than 30 days are removed, since they hold old versions of your files, secrets included.
+- **Whole or not at all.** The new text is written to a private temporary file beside the old one, synced, and then put in its place in one step. A new file is linked into place, which fails rather than overwrite a file that appeared meanwhile. A file that used CRLF line endings keeps them, and an executable stays executable. If the write fails, its backup is removed too.
 - **The same rules as reading**: inside the allowed folders, nothing hidden.
 
 ## What it will not read or write

@@ -9,7 +9,7 @@ from praxis_fs.fs import AccessError, Files, Refused, roots_from_env
 
 from .sandbox import Runner, RunResult, Status
 
-# Code run here may change files in its own folder.
+# Runs code, though in a sandbox that keeps the user's files as they are.
 RUNS_CODE = ToolAnnotations(
     read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=False
 )
@@ -33,7 +33,7 @@ def build_server(runner: Runner) -> MCPServer:
     async def run_file(path: str) -> RunResult:
         """Run a Python, shell or JavaScript file and return what it printed.
 
-        It runs in a sandbox: no network, and it can only write to its own folder.
+        It runs in a sandbox: no network, and it cannot change the user's files.
         It is stopped after a few seconds.
         """
         try:

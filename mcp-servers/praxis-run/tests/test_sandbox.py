@@ -11,13 +11,14 @@ from praxis_run.sandbox import Runner, sandbox_command
 # --- The sandbox command, which is the same everywhere ---
 
 
-def command(*, writable=True, hidden=()):
+def command(*, overlay=False, masked=(), disable_userns=True):
     return sandbox_command(
         "/usr/bin/bwrap",
         "/usr/bin/python3",
         "/home/me/code/app.py",
-        writable=writable,
-        hidden=list(hidden),
+        masked=list(masked),
+        overlay=overlay,
+        disable_userns=disable_userns,
     )
 
 
@@ -25,11 +26,13 @@ def mounts(argv, flag):
     return [argv[i + 1] for i, arg in enumerate(argv) if arg == flag]
 
 
-def test_no_network_and_nothing_shared_with_the_host():
+def test_no_network_nothing_shared_with_the_host_and_no_namespaces_of_its_own():
     argv = command()
 
     assert argv[:4] == ["/usr/bin/bwrap", "--unshare-all", "--die-with-parent", "--new-session"]
     assert "--share-net" not in argv
+    assert argv[4:6] == ["--unshare-user", "--disable-userns"]
+    assert "--disable-userns" not in command(disable_userns=False)
 
 
 def test_only_system_folders_and_a_few_etc_files_are_visible():
@@ -41,26 +44,30 @@ def test_only_system_folders_and_a_few_etc_files_are_visible():
     assert not any(path in visible for path in ("/etc", "/etc/shadow", "/var"))
 
 
-def test_the_files_own_folder_is_writable():
+def test_the_files_own_folder_is_never_writable():
     argv = command()
 
-    assert mounts(argv, "--bind") == ["/home/me/code"]
+    assert "--bind" not in argv
+    assert "/home/me/code" in mounts(argv, "--ro-bind")
     assert argv[argv.index("--chdir") + 1] == "/home/me/code"
 
 
-def test_an_allowed_folder_itself_is_only_readable():
-    argv = command(writable=False)
+def test_with_an_overlay_writes_go_to_a_layer_that_is_thrown_away():
+    argv = command(overlay=True)
 
-    assert mounts(argv, "--bind") == []
-    assert "/home/me/code" in mounts(argv, "--ro-bind")
+    assert mounts(argv, "--overlay-src") == ["/home/me/code"]
+    assert mounts(argv, "--tmp-overlay") == ["/home/me/code"]
+    assert "--bind" not in argv
 
 
-def test_hidden_entries_in_the_folder_are_masked():
-    argv = command(hidden=[("/home/me/code/.git", True), ("/home/me/code/.env", False)])
+def test_what_is_masked_is_masked_after_the_folder_is_mounted():
+    argv = command(masked=[("/home/me/code/sub/.git", True), ("/home/me/code/.env", False)])
 
-    assert "/home/me/code/.git" in mounts(argv, "--tmpfs")
+    assert "/home/me/code/sub/.git" in mounts(argv, "--tmpfs")
     at = argv.index("/home/me/code/.env")
     assert argv[at - 2 : at] == ["--ro-bind", "/dev/null"]
+    # After the folder itself is mounted, or the folder would cover the masks.
+    assert argv.index("/home/me/code/sub/.git") > argv.index("/home/me/code")
 
 
 def test_the_environment_is_cleared_and_the_file_run_last():
@@ -68,6 +75,32 @@ def test_the_environment_is_cleared_and_the_file_run_last():
 
     assert "--clearenv" in argv
     assert argv[-3:] == ["--", "/usr/bin/python3", "/home/me/code/app.py"]
+
+
+def test_hidden_entries_and_sockets_are_found_at_any_depth(tmp_path):
+    (tmp_path / "sub" / ".git").mkdir(parents=True)
+    (tmp_path / "sub" / ".env").write_text("x", encoding="utf-8")
+    (tmp_path / "sub" / "deeper").mkdir()
+    (tmp_path / "sub" / "deeper" / ".secret").write_text("x", encoding="utf-8")
+    (tmp_path / "node_modules" / ".bin").mkdir(parents=True)
+    (tmp_path / "plain.txt").write_text("x", encoding="utf-8")
+
+    masked = sandbox._to_mask(tmp_path, hidden=True)
+
+    assert sorted((Path(p).relative_to(tmp_path).as_posix(), d) for p, d in masked) == [
+        ("sub/.env", False),
+        ("sub/.git", True),
+        ("sub/deeper/.secret", False),
+    ]
+    assert sandbox._to_mask(tmp_path, hidden=False) == []
+
+
+def test_a_folder_too_large_to_check_is_not_run_in(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox, "MAX_CHECKED", 2)
+    for name in "abc":
+        (tmp_path / name).write_text("x", encoding="utf-8")
+
+    assert sandbox._to_mask(tmp_path, hidden=True) is None
 
 
 # --- What the runner says when it cannot run anything ---
@@ -176,30 +209,64 @@ async def test_the_home_folder_and_secrets_are_out_of_sight(files, home):
     assert result.stdout.split() == ["False", "True", "False"], result.stderr
 
 
-async def test_code_can_write_in_its_own_folder_only(files, home):
+async def test_code_cannot_change_its_folder(files, home):
     script = (
-        "open('out.txt', 'w').write('ok')\n"
         "try:\n"
-        "    open('/usr/x', 'w')\n"
+        "    open('out.txt', 'w').write('ok')\n"
+        "    open('app.py', 'a').write('# changed')\n"
+        "    print('written, to a layer that is thrown away')\n"
         "except OSError:\n"
         "    print('read-only')\n"
+        "open('/tmp/scratch', 'w').write('fine')\n"
     )
     (home / "code" / "write.py").write_text(script, encoding="utf-8")
 
     result = await real_runner(files).run("code/write.py")
 
-    assert (home / "code" / "out.txt").read_text(encoding="utf-8") == "ok"
-    assert result.stdout == "read-only\n"
+    assert result.exit_code == 0, result.stderr
+    assert not (home / "code" / "out.txt").exists()
+    assert (home / "code" / "app.py").read_text(encoding="utf-8") == "print('hi')\n"
 
 
-async def test_code_in_an_allowed_folder_itself_cannot_write_there(files, home):
-    script = "try:\n    open('out.txt', 'w')\nexcept OSError:\n    print('read-only')\n"
-    (home / "top.py").write_text(script, encoding="utf-8")
+async def test_hidden_files_deeper_in_the_folder_and_sockets_are_out_of_reach(files, home):
+    import socket
 
-    result = await real_runner(files).run("top.py")
+    runner = real_runner(files)
+    (home / "code" / "sub").mkdir()
+    (home / "code" / "sub" / ".env").write_text("TOKEN=1", encoding="utf-8")
+    server = socket.socket(socket.AF_UNIX)
+    server.bind(str(home / "code" / "agent.sock"))
+    server.listen()
+    script = (
+        "import socket\n"
+        "try:\n"
+        "    print(open('sub/.env').read() != 'TOKEN=1')\n"
+        "except OSError:\n"
+        "    print(True)\n"
+        "try:\n"
+        "    socket.socket(socket.AF_UNIX).connect('agent.sock')\n"
+        "    print('connected')\n"
+        "except OSError:\n"
+        "    print('no socket')\n"
+    )
+    (home / "code" / "peek2.py").write_text(script, encoding="utf-8")
 
-    assert result.stdout == "read-only\n"
-    assert not (home / "out.txt").exists()
+    try:
+        result = await runner.run("code/peek2.py")
+    finally:
+        server.close()
+
+    assert result.stdout.split() == ["True", "no", "socket"], result.stderr
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux only")
+def test_nothing_runs_when_an_allowed_folder_is_inside_a_system_folder(tmp_path):
+    runner = Runner(Files([Path("/opt/praxis-work")], backups=tmp_path / "backups"))
+
+    status = runner.status()
+
+    assert not status.available
+    assert "/opt/praxis-work is inside /opt" in status.reason
 
 
 async def test_a_run_that_takes_too_long_is_stopped(files, home, monkeypatch):
