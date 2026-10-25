@@ -4,18 +4,18 @@ End-to-end demo flows for Praxis.
 
 ## Status
 
-The launch demo is ready to record: [`90s-demo`](90s-demo/README.md). The others are still planned — see [Roadmap](../docs/ROADMAP.md).
+[`90s-demo`](90s-demo/README.md), the launch demo, is ready: a setup script and a shot list. The others are not written yet, though everything they show works.
 
-## Planned demos
+## Demos
 
-| Demo | Description | Requires |
+| Demo | Description | Status |
 |---|---|---|
-| `conversation-basic` | Chat, streaming response, memory across turns | M0.9 |
-| `file-search` | "Find all Python files I edited this week" | M0.10 |
-| `code-edit-run` | Open, edit, and run a script from intent | M0.11 |
-| `privacy-audit` | Trigger a cloud call; observe toast + audit log entry | M0.12 |
-| `90s-demo` | The M0.13 launch demo — intent → mode-switch → action | M0.13 |
+| [`90s-demo`](90s-demo/README.md) | The launch demo: intent → mode switch → useful action | Ready |
+| `conversation-basic` | Chat, streaming response, memory across turns | Not written yet |
+| `file-search` | "Find all Python files I edited this week" | Not written yet |
+| `code-edit-run` | Open, edit, and run a script from intent | Not written yet (the 90-second demo covers it) |
+| `privacy-audit` | Trigger a cloud call; observe the notice and the audit log entry | Not written yet |
 
-## Structure (M0.13)
+## Structure
 
 Each demo is a self-contained directory with a `README.md` and a `demo.sh` or `demo.py` that drives the scenario.

@@ -15,9 +15,16 @@ The name is from the Greek *praxis* (πρᾶξις) — *action; the moment thou
 
 ## Status
 
-**Phase 0 · Spike.** We are building the Canvas as a Linux app first. Once the core idea is proven, Phase 1 wraps it into a bootable ISO. See the [Roadmap](docs/ROADMAP.md) for the full plan.
+**Phase 0 · Spike — 11 of 13 milestones done.** The Canvas runs as an app on an existing Linux, packaged as an AppImage. Once the idea is proven, Phase 1 wraps it into a bootable ISO. See the [Roadmap](docs/ROADMAP.md) for the full plan.
 
-This repository is intentionally early. Star the repo to follow along.
+What works today, on a local model:
+
+- **Conversation, File and Code modes on one surface.** Ask "what did I work on this week?" and the Canvas lists those files; open one, ask for a summary, edit it, run it.
+- **The agent proposes; you decide.** A change to a file is a diff until you press Apply, and every change can be undone.
+- **Code runs in a sandbox** (bubblewrap): no network, and it cannot change your files.
+- **Local first, legible, stoppable.** Cloud models are optional and announced before every request; every model call, file read, write and run is audited before it happens; Esc stops the agent.
+
+Not yet: an ISO, moving or deleting files, Doc mode, the settings panel. This repository is intentionally early. Star it to follow along.
 
 ## What's in here
 
@@ -30,7 +37,24 @@ This repository is intentionally early. Star the repo to follow along.
 | `docs/`        | Architecture decisions and the roadmap |
 | `examples/`    | End-to-end demo flows |
 
-## Quickstart (Phase 0 dev preview)
+## Try it: the AppImage
+
+One file for Linux, with the agent and the model proxy inside, on a Python of their own. Download it from the latest run of the [AppImage workflow](https://github.com/praxis-linux/praxis-linux/actions/workflows/appimage.yml) (under "Artifacts"), or build it with `scripts/build-appimage.sh`.
+
+```bash
+ollama pull qwen2.5:7b               # the local model; Ollama itself is not inside
+sudo apt install bubblewrap          # for Run (sudo pacman -S bubblewrap on Arch)
+chmod +x Praxis*.AppImage
+./Praxis*.AppImage
+```
+
+It needs a desktop Linux: it brings its own GTK and WebKit, and uses the system's graphics drivers, X11 or Wayland libraries and fonts, which every desktop install has. Tested on Ubuntu 24.04 and Arch Linux. Run uses the system's `python3`, `bash` and `node`.
+
+Settings are environment variables, as for the agent: `PRAXIS_MODEL=cloud-fast` with `ANTHROPIC_API_KEY` for a cloud model, `PRAXIS_FS_ROOTS` for the folders it may use. The window starts the agent and stops it when it closes; the agent's and the proxy's logs are in `~/.local/share/com.praxislinux.canvas/logs`. Without FUSE (in containers, or WSL), run it with `--appimage-extract-and-run`.
+
+To see it at its best, follow the [90-second demo](examples/90s-demo/README.md): a setup script makes a folder with a few documents and a small project with a bug in it.
+
+## Develop: run it from the source
 
 You need [Ollama](https://ollama.com), [uv](https://docs.astral.sh/uv/), Node 20+ (pnpm comes through `corepack`), and for the desktop window Rust with the [Tauri prerequisites](https://tauri.app/start/prerequisites/).
 
@@ -51,22 +75,11 @@ Type an intent in the bar at the bottom — try "what is in my Documents folder?
 
 To use a cloud model instead, set `ANTHROPIC_API_KEY` and add `--model cloud-fast` (Claude Haiku) or `--model cloud-strong` (Claude Opus). The file names and contents the agent looks at then go to Anthropic, and the Canvas says so before each request.
 
-### The AppImage
-
-Praxis also comes as one file for Linux, with the agent and the model proxy inside, on a Python of their own. The [AppImage workflow](.github/workflows/appimage.yml) builds it for every change to `main`; to build it yourself, run `scripts/build-appimage.sh`.
-
-```bash
-ollama pull qwen2.5:7b               # the local model; Ollama itself is not inside
-sudo apt install bubblewrap          # for Run (sudo pacman -S bubblewrap on Arch)
-chmod +x Praxis*.AppImage
-./Praxis*.AppImage
-```
-
-It needs a desktop Linux: it brings its own GTK and WebKit, and uses the system's graphics drivers, X11 or Wayland libraries and fonts, which every desktop install has. Tested on Ubuntu 24.04 and Arch Linux. Run uses the system's `python3`, `bash` and `node`.
-
-Settings are environment variables, as for the agent: `PRAXIS_MODEL=cloud-fast` with `ANTHROPIC_API_KEY` for a cloud model, `PRAXIS_FS_ROOTS` for the folders it may use. The window starts the agent and stops it when it closes; the agent's and the proxy's logs are in `~/.local/share/com.praxislinux.canvas/logs`. Without FUSE (in containers, or WSL), run it with `--appimage-extract-and-run`.
+`make lint test` runs the checks CI runs (it needs uv, pnpm and Rust). Each part has its own README: [`canvas/`](canvas/README.md), [`agent/`](agent/README.md), [`mcp-servers/praxis-fs`](mcp-servers/praxis-fs/README.md), [`mcp-servers/praxis-run`](mcp-servers/praxis-run/README.md).
 
 ## Architecture in one diagram
+
+Where Praxis is going. Today, in Phase 0: the Canvas (Tauri, React, A2UI); the agent (FastAPI, PydanticAI) with a conversation store and an audit log in SQLite; Ollama and cloud models behind a LiteLLM proxy; and two MCP servers, `praxis-fs` and `praxis-run`, on an existing Linux.
 
 ```
 ┌─────────────────────────────────────────────────┐

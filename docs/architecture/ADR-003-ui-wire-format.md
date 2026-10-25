@@ -163,7 +163,7 @@ Thirty-six turns on `qwen2.5:7b` (twelve intents, three runs each) against a sam
 | Asked to rename (3 turns): said it cannot | 0 — two replies offered to rename the file |
 | Model requests per turn | 2.8 on average; 1.2–4.7 s per turn |
 
-Nothing was changed in any run, because nothing can be: the server has no tool that writes. The model's claims about what it can do are the unreliable part, not the files it shows.
+Nothing was changed in any run, because nothing could be: at M0.8 the server had no tool that writes (writing came with M0.11, behind the user's click; section 12). The model's claims about what it can do are the unreliable part, not the files it shows.
 
 ### With streaming and memory (M0.9)
 
