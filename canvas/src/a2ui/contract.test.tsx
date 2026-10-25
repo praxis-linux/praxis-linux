@@ -659,6 +659,16 @@ test("a file opens in an editor holding its text", async () => {
   expect(screen.getByText("$ python3 app.py · exit code 1 · 0.2 s")).toBeTruthy();
 });
 
+test("a proposed change's lines are marked as added or removed, as text", async () => {
+  await showCode();
+
+  const diff = document.querySelector("code.language-diff")!;
+  expect(diff.querySelector(".diff-del")?.textContent).toBe("-print('hi')\n");
+  expect(diff.querySelector(".diff-add")?.textContent).toBe("+print('bye')\n");
+  expect(diff.querySelectorAll(".diff-file")).toHaveLength(2);
+  expect(diff.textContent).toContain("@@ -1 +1 @@");
+});
+
 test("Save sends what was typed, with the file and the hash it was opened at", async () => {
   const editor = await showCode();
   const view = EditorView.findFromDOM(editor.closest(".cm-editor") as HTMLElement)!;

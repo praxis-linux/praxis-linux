@@ -105,6 +105,12 @@ html, body, #root {
 .code-editor .cm-editor.cm-focused { outline: 1px solid var(--accent-dim); }
 .code-editor .cm-scroller { overflow: auto; }
 
+/* A proposed change, before the user applies it. */
+code.language-diff .diff-add  { color: #7ee2a8; background: rgba(46, 160, 67, 0.15); }
+code.language-diff .diff-del  { color: #ff9b9b; background: rgba(248, 81, 73, 0.15); }
+code.language-diff .diff-hunk { color: var(--text-secondary); }
+code.language-diff .diff-file { color: var(--text-secondary); }
+
 .workspace-error {
   max-width: 640px;
   padding: 10px 14px;
