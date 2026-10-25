@@ -25,6 +25,8 @@ export interface CanvasState {
   /** What the agent is doing right now, such as a search, while it works. */
   status: string | null;
   error: string | null;
+  /** A short-lived notice, such as a request going to a cloud model. */
+  notice: { text: string; kind: "cloud" | "info" } | null;
   workspace: Surface | undefined;
   context: Surface | undefined;
 }
@@ -32,12 +34,16 @@ export interface CanvasState {
 // Where the current conversation's id is kept, so a reload continues it.
 const CONVERSATION_KEY = "praxis.conversation";
 
+// How long a notice stays up.
+export const NOTICE_MS = 6000;
+
 const INITIAL_STATE: CanvasState = {
   mode: "conversation",
   call: null,
   busy: false,
   status: null,
   error: null,
+  notice: null,
   workspace: undefined,
   context: undefined,
 };
@@ -109,6 +115,43 @@ export class CanvasSession {
   }
 
   /**
+   * The kill switch: stop what the agent is doing, now. The Canvas drops the turn
+   * at once; the agent is told to end every turn it is working on, in case this
+   * Canvas is not the only one that started one.
+   */
+  async stop(): Promise<void> {
+    this.turn?.abort();
+    this.set({ busy: false, status: null });
+    this.notify("Stopped.", "info");
+    try {
+      await this.agent.stop(this.conversation);
+    } catch (error) {
+      this.set({ error: describe(error) });
+    }
+  }
+
+  /** Deletes this conversation, with what was read in it, and starts an empty one. */
+  async forgetConversation(): Promise<void> {
+    this.turn?.abort();
+    try {
+      await this.agent.forget(this.conversation);
+    } catch (error) {
+      this.set({ error: `The conversation was not deleted. ${describe(error)}` });
+      return;
+    }
+    this.newConversation();
+    this.notify("Conversation deleted.", "info");
+  }
+
+  private noticeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  private notify(text: string, kind: "cloud" | "info") {
+    clearTimeout(this.noticeTimer);
+    this.set({ notice: { text, kind } });
+    this.noticeTimer = setTimeout(() => this.set({ notice: null }), NOTICE_MS);
+  }
+
+  /**
    * Runs one turn. A new turn supersedes the one in flight.
    *
    * A `quiet` turn reports nothing that goes wrong: used to resume on start, when
@@ -141,6 +184,10 @@ export class CanvasSession {
     switch (event.type) {
       case "call":
         this.set({ call: { model: event.model, destination: event.destination } });
+        // Nothing leaves the machine unannounced (ADR-001 §12). The audit log has it too.
+        if (event.destination === "cloud") {
+          this.notify(`This request is going to ${event.model}, a cloud model.`, "cloud");
+        }
         break;
       case "status":
         this.set({ status: event.text });

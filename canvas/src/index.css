@@ -118,6 +118,33 @@ html, body, #root {
   padding: 4px 10px;
 }
 .intent-new:hover { color: var(--text-primary); border-color: var(--accent-dim); }
+.intent-new.danger { color: var(--warn); border-color: var(--warn); }
+
+.intent-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.intent-submit.stop { background: var(--warn); }
+
+/* A short-lived notice above the intent bar: a cloud call, a stop, a deletion. */
+.notice {
+  position: fixed;
+  right: 16px;
+  bottom: 72px;
+  max-width: 420px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.notice.cloud { border-color: var(--warn); color: var(--warn); }
 
 .mode-badge {
   font-size: 11px;

@@ -25,11 +25,17 @@ export interface AgentClient {
   action(sessionId: string, action: ActionPayload, signal: AbortSignal): AsyncIterable<AgentEvent>;
   /** Where a conversation left off: its last screen and its trail. Nothing if it is new. */
   resume(sessionId: string, signal: AbortSignal): AsyncIterable<AgentEvent>;
+  /** The kill switch: end every turn the agent is working on. */
+  stop(sessionId: string): Promise<void>;
+  /** Delete a conversation and what was read during it. */
+  forget(sessionId: string): Promise<void>;
 }
 
 export const httpAgent: AgentClient = {
   intent: (sessionId, intent, signal) => post("/intent", { intent }, sessionId, signal),
   resume: (sessionId, signal) => post("/resume", {}, sessionId, signal),
+  stop: (sessionId) => command("/stop", sessionId),
+  forget: (sessionId) => command("/forget", sessionId),
   action: (sessionId, action, signal) => {
     const { name, surfaceId, sourceComponentId, timestamp, context } = action;
     const message = {
@@ -42,6 +48,21 @@ export const httpAgent: AgentClient = {
 
 /** Why a request to the agent failed, in words fit to show the user. */
 export class AgentError extends Error {}
+
+/** A request that is answered once, not streamed. */
+async function command(path: string, sessionId: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(AGENT_URL + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Praxis-Session": sessionId },
+      body: "{}",
+    });
+  } catch {
+    throw new AgentError("Could not reach the agent. Is it running?");
+  }
+  if (!response.ok) throw new AgentError(`The agent answered with HTTP ${response.status}.`);
+}
 
 const EVENT_TYPES = new Set<string>(
   AgentEventSchema.options.map((option) => option.shape.type.value),

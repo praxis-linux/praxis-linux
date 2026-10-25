@@ -190,8 +190,22 @@ test("shows a cloud call as a cloud call", async () => {
 
   await submitIntent("hi");
 
-  const badge = await screen.findByText(/cloud-strong/);
+  await waitFor(() => expect(document.querySelector(".model-badge")).not.toBeNull());
+  const badge = document.querySelector(".model-badge")!;
+  expect(badge.textContent).toContain("cloud-strong");
   expect(badge.className).toContain("cloud");
+  // And it is announced: nothing leaves the machine unannounced.
+  expect(screen.getByText(/This request is going to cloud-strong, a cloud model./)).toBeTruthy();
+});
+
+test("a local call is not announced", async () => {
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+
+  await submitIntent("plan a project");
+
+  await screen.findByText("Plan a project");
+  expect(screen.queryByText(/a cloud model/)).toBeNull();
 });
 
 test("refuses components outside the catalog", async () => {
@@ -465,13 +479,95 @@ test("the model badge is cleared by a turn that calls no model", async () => {
   render(<App />);
   await screen.findByText("Welcome to Praxis");
   await submitIntent("hi");
-  await screen.findByText(/cloud-strong/);
+  await waitFor(() => expect(document.querySelector(".model-badge")).not.toBeNull());
   // Opening a file is answered without a call event: no model was involved.
   agentAnswers([{ type: "mode", mode: "file" }, ...a2ui(GOLDEN)]);
 
   fireEvent.click(await screen.findByText("__init__.py"));
 
-  await waitFor(() => expect(screen.queryByText(/cloud-strong/)).toBeNull());
+  await waitFor(() => expect(document.querySelector(".model-badge")).toBeNull());
+});
+
+// --- the kill switch and deleting -------------------------------------------------
+
+/** Stubs the agent so that intents hang until stopped; records every request. */
+function agentThatHangs() {
+  const paths: string[] = [];
+  let intentSignal: AbortSignal | undefined;
+  vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    const path = new URL(url).pathname;
+    paths.push(path);
+    if (path === "/resume") return ndjson([]);
+    if (path === "/stop") return new Response('{"stopped": 1}');
+    intentSignal = init.signal ?? undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            JSON.stringify({ type: "status", text: "Searching for *.py…" }) + "\n",
+          ),
+        );
+      },
+    });
+    return new Response(body);
+  });
+  return { paths, signal: () => intentSignal };
+}
+
+test("Esc stops the agent while it works", async () => {
+  const agent = agentThatHangs();
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+  await submitIntent("find my python files");
+  await screen.findByText("Searching for *.py…");
+
+  fireEvent.keyDown(window, { key: "Escape" });
+
+  await screen.findByText("Stopped.");
+  expect(agent.signal()?.aborted).toBe(true);
+  await waitFor(() => expect(agent.paths).toContain("/stop"));
+  expect(screen.getByPlaceholderText("What do you want to do?")).toBeTruthy();
+});
+
+test("the send button becomes a Stop button while the agent works", async () => {
+  const agent = agentThatHangs();
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+  await submitIntent("find my python files");
+
+  fireEvent.click(await screen.findByRole("button", { name: "Stop (Esc)" }));
+
+  await waitFor(() => expect(agent.paths).toContain("/stop"));
+  expect(screen.getByRole("button", { name: "Submit intent" })).toBeTruthy();
+});
+
+test("Esc does nothing when the agent is idle", async () => {
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+
+  fireEvent.keyDown(window, { key: "Escape" });
+
+  expect(screen.queryByText("Stopped.")).toBeNull();
+  expect(sent).toEqual([]);
+});
+
+test("deleting a conversation asks first, then starts a new one", async () => {
+  agentAnswers(GOLDEN_TURN, { resume: RESUMED });
+  render(<App />);
+  await screen.findByText("This conversation");
+  const old = resumes[0].session;
+
+  fireEvent.click(screen.getByText("Delete…"));
+  fireEvent.click(screen.getByText("Keep"));
+  expect(sent).toEqual([]);
+  fireEvent.click(screen.getByText("Delete…"));
+  fireEvent.click(screen.getByText("Delete"));
+
+  await screen.findByText("Conversation deleted.");
+  expect(sent.map((r) => [r.path, r.session])).toEqual([["/forget", old]]);
+  expect(screen.getByText("Welcome to Praxis")).toBeTruthy();
+  expect(screen.queryByText("This conversation")).toBeNull();
+  expect(localStorage.getItem("praxis.conversation")).not.toBe(old);
 });
 
 test("Enter that confirms an input-method composition does not send the intent", async () => {
