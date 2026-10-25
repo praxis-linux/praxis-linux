@@ -1,7 +1,7 @@
 # ADR-003: UI wire format, catalog, and the agent–Canvas contract
 
 **Status:** Accepted
-**Date:** 2026-09-30 (sections 8 and 9 added the same day, with M0.8; sections 10 and 11 on 2026-10-25, with M0.9)
+**Date:** 2026-09-30 (sections 8 and 9 added the same day, with M0.8; sections 10 and 11 on 2026-10-25, with M0.9; section 12 on 2026-10-25, with M0.11)
 **Decision-makers:** Founding contributor
 
 ## Context
@@ -29,6 +29,7 @@ Catalog id: `praxis-linux:catalog:phase0`.
 |---|---|---|
 | Text, Row, Column, List, Card, Tabs, Divider, Modal, Button, TextField, CheckBox, ChoicePicker, Slider, DateTimeInput | Image, Video, AudioPlayer, Icon | They load remote URLs, which would let a surface make network requests |
 | FileImage (Praxis's own) | | Shows an image file from an inline `data:image/…;base64,…` address only (PNG, JPEG, GIF or WebP); anything else is refused by its schema, so it cannot fetch |
+| CodeEditor (Praxis's own) | | A CodeMirror 6 editor for a file's text. Its `value` is bound to the data model, so what the user types is what Save sends (section 12). It loads nothing |
 | All basic functions except one | `openUrl` | A surface must not be able to navigate away |
 
 `Button` is our own implementation of the basic catalog's Button API so the Canvas can style each variant. Praxis-specific components (`FileTree`, `CodeEditor`, …) join this catalog as File and Code mode land.
@@ -53,12 +54,12 @@ The planner asks the provider for JSON constrained to the plan's schema (Pydanti
 | `POST /stop` | — | The kill switch: end every turn the agent is working on, in every conversation. Answers `{"stopped": n}` |
 | `POST /forget` | — | Delete this conversation and what was read in it. Answers `{"forgotten": n}`; the audit log keeps its records |
 
-All require an `X-Praxis-Session` header, which names the conversation, and answer with one JSON event per line:
+All require an `X-Praxis-Session` header, which names the conversation, and, when the agent was started with a token, an `X-Praxis-Token` header carrying it (HTTP 401 otherwise). They answer with one JSON event per line:
 
 | Event | Payload | When |
 |---|---|---|
 | `call` | `model`, `destination` (`local` or `cloud`) | Before the model is called, after the audit row is written |
-| `status` | `text`, e.g. "Searching for *.py…" | Before each lookup runs |
+| `status` | `text`, e.g. "Searching for *.py…" | Before each lookup runs, and once the model has started writing a proposed change |
 | `mode` | `mode` | With the first drawing of a screen, and whenever it changes |
 | `a2ui` | `message` — one A2UI server-to-client message | Once per message |
 | `error` | `message` | The turn failed |
@@ -69,9 +70,9 @@ All require an `X-Praxis-Session` header, which names the conversation, and answ
 
 The first drawing of a screen replaces the surface (`deleteSurface`, `createSurface`, `updateComponents`, and `updateDataModel` when there is a form). Deleting a surface that does not exist is a no-op, so the agent does not track what the Canvas is showing. While a reply streams in (section 10), later drawings send only `updateComponents`, so the screen grows without flicker, unless that would leave a component unreachable from the root, which the Canvas rejects; then the surface is replaced again. In place, only the forms that are new are sent, each at its own path (`/b1`), so streaming never wipes what the user has typed into a form.
 
-Component ids are stable for that reason: the model's blocks are `b0`, `b1`, …, and what was looked up is `f0`, `f1`, …, so a listing keeps its id while the reply around it is still being written.
+Component ids are stable for that reason: the model's blocks are `b0`, `b1`, …, and what the agent put there itself (a listing, a file, an image, an editor, a proposed change, what a run printed) is `f0`, `f1`, …, so a listing keeps its id while the reply around it is still being written. An editor's text lives in the data model at `/f<n>/content`.
 
-### 7. Four UI actions
+### 7. UI actions
 
 | Action | Context | Agent treats it as |
 |---|---|---|
@@ -79,14 +80,20 @@ Component ids are stable for that reason: the model's blocks are `b0`, `b1`, …
 | `submit` | `purpose`, `values` (the form's data) | A request carrying the user's answers |
 | `open` | `target`, `kind` (`file` or `directory`) | A click on a file or folder: the agent calls the filesystem tool directly and shows the result. No model is called. |
 | `revisit` | `turn` | A click on a turn in the trail: the agent shows that turn's screen again as it was stored. No model and no tool is called. |
+| `edit` | `target` | Open the file in the editor |
+| `save` | `target`, `base` (the file's hash when it was opened), `content` (bound to the editor) | Write what is in the editor, unless the file has changed since |
+| `run` | `target` | Run the file as saved, in the sandbox, and show what it printed |
+| `apply` | `proposal` | Make the change the model proposed, unless the file has changed since |
+| `discard` | `proposal` | Drop the proposed change |
+| `undo` | `backup` | Put the file back as it was before a save or an applied change |
 
-Any other action name is rejected without calling a model.
+The last six never call a model (section 12). Their context is checked before anything is streamed back, and a malformed one is rejected with HTTP 400. Any other action name is rejected without calling a model.
 
 A context key must not be named `path` or `call`: A2UI reads an object with such a key as a data binding or a function call, and the context reaches the agent empty. That is why `open` carries `target`.
 
 ### 8. The model asks for tools through the same constrained output
 
-Each model step is one schema-constrained object: either a lookup (`search_files`, `recent_files`, `list_directory`, `read_text_file`) or the reply. The agent runs the lookup against the MCP server, tells the model the result, and asks for the next step. After three lookups only a reply is accepted.
+Each model step is one schema-constrained object: a lookup (`search_files`, `recent_files`, `list_directory`, `read_text_file`), a proposed change (`propose_edit`: a path, a one-sentence summary and the file's complete new text), or the reply. The agent runs the lookup against the MCP server, tells the model the result, and asks for the next step. A proposed change ends the turn (section 12). After three lookups only a reply is accepted.
 
 Provider function calling is not used. With `qwen2.5:7b` through LiteLLM and Ollama it failed both ways it was tried: alongside constrained output the model never called a tool (0 of 8 turns) and announced files it had not looked up; without constrained output it looped (26 requests in one turn) or called tools that do not exist (7 of 8 turns failed).
 
@@ -112,6 +119,19 @@ Every finished turn is stored in SQLite (`~/.praxis/conversations.db`): what the
 - **What the user is looking at is added to the prompt.** When the screen shows a file or a folder, from a reply, a click or a revisited turn, the request goes to the model followed by "(On the user's screen right now: the file docs/plan.md.)". This is what lets "summarise this" work.
 - **The Canvas keeps the conversation id across reloads**, and asks `/resume` on start to show the last screen and the trail again. "New" starts another conversation; the old one stays stored.
 - Resuming and revisiting replay stored A2UI messages. Neither calls a model or a tool.
+
+### 12. Files change and code runs only when the user clicks
+
+The model can propose; only the user's click acts. That is enforced by what each side can call, not by the prompt:
+
+- **The model's only way to change a file is `propose_edit`.** The agent reads the file as it is now, shows the change as a diff with Apply and Discard, and keeps the proposed text itself, under a random id, until the user decides. The Canvas only ever sends that id back, so what is applied is exactly what was shown. Proposals are kept in memory: up to 20 per conversation, and none after the agent restarts. "Delete…" drops them too.
+- **A proposal is refused, with the reason on screen, for** a hidden file or one outside the allowed folders, a file that is not whole UTF-8 text, and a file longer than the 4,000 characters the model is shown of a file, since a change to the part it did not see would lose it. A file keeps its final line break, which small models tend to drop.
+- **Every write checks the file's hash.** `edit` reads the whole file (up to 64 KB) and its hash; `save` and `apply` pass that hash to `praxis-fs`, which refuses the write if the file has changed since. A new file is only created where none exists.
+- **Every write can be undone.** `praxis-fs` keeps what each write replaced in `~/.praxis/backups`, and `undo` restores it, unless the file has changed again since.
+- **Running is a separate server, `praxis-run`, and only the user's Run asks for it.** The file runs in a bubblewrap sandbox: no network, the system folders read-only, a private `/tmp`, its own folder readable but never changed (where bubblewrap has overlays, writes there go to a layer thrown away at the end), hidden files and sockets in it masked at any depth, stopped after 10 seconds. Where that cannot work (Windows, macOS, no bubblewrap), the Canvas shows no Run button. What a run printed is added to the next prompt, so "why did that fail?" works.
+- **What the diff shows is what is written.** Lines are split at `\n` only, as interpreters split them; invisible and control characters (other line breaks, zero-width and bidirectional marks) are written out as `⟨U+XXXX⟩` with a warning, trailing whitespace is shown, and long lines wrap. Only the agent's own diffs are coloured as proposed changes: a `praxis-diff` fence, which the agent strips from the model's code.
+- **Every write and run is audited before it happens**, as asked for by the user. For writes the audit log records the path, how many characters and the expected hash, never the text; for an undo, which file it put back.
+- **The kill switch stops file actions too**, as well as model turns.
 
 ## Evidence
 
@@ -160,6 +180,19 @@ Twelve scripted conversations on `qwen2.5:7b` (four scripts, three runs each: 24
 
 The first request after the model has been idle is slow: 5.8 s to the first drawing in these runs, and 42 s when Ollama had to load the model after a restart.
 
+### With Code mode (M0.11)
+
+The same script on Ubuntu 24.04 (WSL) with the real `praxis-fs` and `praxis-run`, once on Claude Haiku 5.5 (`cloud-fast`) and once on `qwen2.5:7b`, then again in a real browser against the Canvas on Claude Haiku: open a file, edit, save, run, undo; ask for a change to the file; ask for a new file; run both.
+
+| | Claude Haiku 5.5 | qwen2.5 7B |
+|---|---|---|
+| Edit, save, run, undo (no model) | Worked | Worked |
+| "Make greet put an exclamation mark at the end": read the file, then proposed the change | One-line diff, correct; ran as expected after Apply | Same, but dropped the file's final line break (now kept by the agent) |
+| "Create demo/hello.py that prints 1 to 3": proposed a new file | Correct; ran after Apply | Correct; ran after Apply |
+| The sandboxed file tried the network and looked for `~/.praxis` | Network unreachable; not visible | Same |
+
+In the browser run, the user typed a line into the file, saved it, then asked for a change. The model proposed the change from its read of the file in an earlier turn, and the diff showed it would delete the user's new line. Nothing was applied. The instructions now say to read the file again in the same turn before proposing; on the rerun the model did, and kept the line. This is the case the diff exists for, and why the agent never applies a change itself.
+
 ## Consequences
 
 **Positive:**
@@ -169,11 +202,13 @@ The first request after the model has been idle is slow: 5.8 s to the first draw
 - The contract is tested from both sides: the agent's builders write a golden file, and the Canvas tests feed that file to the real renderer.
 
 **Negative / risks:**
-- **Files can carry instructions to the model (prompt injection).** A file the model reads can steer it. With no write tools the damage is bounded, but real: it can make the model read up to three more files per turn, and with a cloud alias those go to the provider; write misleading text or code ("run `curl … | sh`"); offer a card whose request differs from its title; and stay in the conversation's history. Links and images it writes are shown as text, never followed or loaded. A per-turn consent for cloud calls (M0.12) and showing a card's request before it runs are the next defences.
-- **Any program on this machine can call the agent.** Host and Origin checks stop web pages, including DNS rebinding, but there is no shared secret with the Canvas yet.
+- **Files can carry instructions to the model (prompt injection).** A file the model reads can steer it: make it read up to three more files per turn, and with a cloud alias those go to the provider; write misleading text or code ("run `curl … | sh`"); offer a card whose request differs from its title; propose a harmful change to a file; and stay in the conversation's history. Links and images it writes are shown as text, never followed or loaded. A proposed change is only a diff until the user applies it, and can be undone; but a user who applies without reading the diff, then presses Run, runs what the model wrote. The sandbox bounds that run (no network, nothing of the user's changed, 10 seconds) but does not yet limit memory or the number of processes. What a run prints goes into the next prompt, so with a cloud alias it reaches the provider. A per-turn consent for cloud calls and showing a card's request before it runs are the next defences.
+- **Running code is Linux-only and needs bubblewrap.** Where bubblewrap cannot make user namespaces (some hardened kernels, Ubuntu's AppArmor restriction for programs without a profile), there is no Run button and the reason is logged.
+- **The token is only as private as where it is kept.** Host and Origin checks stop web pages, including DNS rebinding. Other programs on the machine are stopped by `PRAXIS_AGENT_TOKEN`, which the packaged app makes for each start and keeps in its own window; `scripts/dev.py` makes one too, but in browser mode it sits in the page the dev server serves. An agent started by hand without the variable answers anyone on the machine.
 - **Conversations hold whatever was read during them**, file contents included, in `~/.praxis/conversations.db`. It is on this machine and `praxis-fs` will not read it. "Delete…" removes a conversation (and compacts the file so the text is gone from it); nothing expires old conversations on its own yet.
 - **"What is on screen" is a sentence added to the user's request.** It is how the model learns the context, and a small model may take it more or less literally than intended.
-- **Expressiveness is capped by the plan's four block types.** New UI means a new block type and a builder, by design.
+- **Expressiveness is capped by the plan's four block types**, plus the screens the agent builds itself (listings, files, images, the editor, proposed changes, run output). New UI means a new block type and a builder, by design.
+- **The model only changes small files.** A proposal for a file longer than the 4,000 characters it is shown is refused. The editor handles files up to 64 KB, which the user can change by hand.
 - **The A2UI packages are pre-1.0 and moving.** `@a2ui/web_core` 0.12 already exports a v1.0 protocol. Versions are pinned by the lockfile; upgrades go through the contract tests.
 - **`@a2ui/react` 0.12.0 ships its components without their CSS class names**, so the Canvas styles the rendered elements itself. Revisit when upstream fixes the build.
 - **A 7B model underuses the UI.** The router (M0.7) should be able to send turns to a larger local model, and the default local model is an open question.

@@ -29,5 +29,27 @@ export async function renderAgentMarkdown(
     span.textContent = href && href !== text ? `${text} (${href})` : text;
     link.replaceWith(span);
   }
+  for (const code of template.content.querySelectorAll("code.language-praxis-diff")) {
+    markDiff(code);
+  }
   return template.innerHTML;
+}
+
+/** Colours the agent's diff of a proposed change: added lines, removed lines, and where
+ * each change is. Only "praxis-diff" fences, which the agent strips from the model's
+ * own code, so a diff the model writes cannot pass for one. Built from the text alone,
+ * so nothing in the diff can become markup. */
+function markDiff(code: Element) {
+  const lines = (code.textContent ?? "").split("\n");
+  code.replaceChildren(
+    ...lines.map((line, i) => {
+      const span = document.createElement("span");
+      if (line.startsWith("+++") || line.startsWith("---")) span.className = "diff-file";
+      else if (line.startsWith("+")) span.className = "diff-add";
+      else if (line.startsWith("-")) span.className = "diff-del";
+      else if (line.startsWith("@@")) span.className = "diff-hunk";
+      span.textContent = i < lines.length - 1 ? `${line}\n` : line;
+      return span;
+    }),
+  );
 }

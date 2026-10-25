@@ -1,15 +1,19 @@
 // The Canvas side of the agent contract: what the agent's builders emit must be
 // accepted by the real A2UI renderer, and what the user does must reach the agent.
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { EditorView } from "codemirror";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 // Written by agent/tests/test_a2ui.py from the agent's own builders.
 import golden from "../../../agent/tests/golden/workspace_messages.json";
 import trailGolden from "../../../agent/tests/golden/trail_messages.json";
+import codeGolden from "../../../agent/tests/golden/code_messages.json";
 import App from "../App";
 
 const GOLDEN: unknown[] = golden;
 // The trail of a two-turn conversation, the second turn on screen.
 const TRAIL: unknown[] = trailGolden;
+// A Code mode screen: a change just saved, the editor, a proposed change and a run.
+const CODE: unknown[] = codeGolden;
 
 interface SentRequest {
   path: string;
@@ -629,4 +633,105 @@ test("an error while resuming on start is not reported", async () => {
   await waitFor(() => expect(resumes).toHaveLength(1));
   await new Promise((resolve) => setTimeout(resolve, 20));
   expect(screen.queryByRole("alert")).toBeNull();
+});
+
+// --- Code mode ---
+
+const CODE_TURN = [{ type: "mode", mode: "code" }, ...a2ui(CODE)];
+
+async function showCode() {
+  agentAnswers(CODE_TURN);
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+  await submitIntent("open app.py");
+  return (await screen.findByLabelText("Editing app.py")) as HTMLElement;
+}
+
+test("a file opens in an editor holding its text", async () => {
+  const editor = await showCode();
+
+  expect(editor.closest(".cm-editor")).toBeTruthy();
+  expect(EditorView.findFromDOM(editor.closest(".cm-editor") as HTMLElement)?.state.doc.toString()).toBe(
+    "print('hi')\n",
+  );
+  // The proposed change, and what the run printed, are on the same screen.
+  expect(screen.getByText("Proposed change to /home/ada/projects/app.py")).toBeTruthy();
+  expect(screen.getByText("$ python3 app.py · exit code 1 · 0.2 s")).toBeTruthy();
+});
+
+test("a proposed change's lines are marked as added or removed, as text", async () => {
+  await showCode();
+
+  const diff = document.querySelector("code.language-praxis-diff")!;
+  expect(diff.querySelector(".diff-del")?.textContent).toBe("-print('hi')\n");
+  expect(diff.querySelector(".diff-add")?.textContent).toBe("+print('bye')\n");
+  expect(diff.querySelectorAll(".diff-file")).toHaveLength(2);
+  expect(diff.textContent).toContain("@@ -1 +1 @@");
+});
+
+test("Save sends what was typed, with the file and the hash it was opened at", async () => {
+  const editor = await showCode();
+  const view = EditorView.findFromDOM(editor.closest(".cm-editor") as HTMLElement)!;
+
+  act(() => {
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "print('bye')\n" } });
+  });
+  fireEvent.click(screen.getByText("Save"));
+
+  await waitFor(() => expect(sent).toHaveLength(2));
+  expect(sent[1].body.action).toMatchObject({
+    name: "save",
+    context: {
+      target: "/home/ada/projects/app.py",
+      base: "ab".repeat(32),
+      content: "print('bye')\n",
+    },
+  });
+});
+
+test("Apply, Discard, Undo and Run send what they act on", async () => {
+  await showCode();
+
+  for (const label of ["Apply", "Discard", "Undo", "Run", "Run again"]) {
+    fireEvent.click(screen.getByText(label));
+  }
+
+  await waitFor(() => expect(sent).toHaveLength(6));
+  expect(sent.slice(1).map((request) => request.body.action)).toMatchObject([
+    { name: "apply", context: { proposal: "c0ffee" } },
+    { name: "discard", context: { proposal: "c0ffee" } },
+    { name: "undo", context: { backup: "20261025T120000-0a1b2c3d" } },
+    { name: "run", context: { target: "/home/ada/projects/app.py" } },
+    { name: "run", context: { target: "/home/ada/projects/app.py" } },
+  ]);
+});
+
+test("an editor whose text comes from a function the catalog leaves out is refused", async () => {
+  const [, create, components] = CODE as any[];
+  const unbound = structuredClone(components);
+  for (const component of unbound.updateComponents.components) {
+    if (component.component === "CodeEditor") component.value = { call: "openUrl", args: {} };
+  }
+  agentAnswers([...a2ui([CODE[0], create, unbound])]);
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+
+  await submitIntent("open app.py");
+
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/not|could/i));
+  expect(screen.queryByLabelText("Editing app.py")).toBeNull();
+});
+
+test("an agent that does not recognise this Canvas says so in plain words", async () => {
+  vi.stubGlobal("fetch", async (url: string) =>
+    new URL(url).pathname === "/resume" ? ndjson([]) : new Response("no", { status: 401 }),
+  );
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+
+  await submitIntent("hello");
+
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "The agent did not recognise this Canvas. Restart Praxis.",
+  );
 });

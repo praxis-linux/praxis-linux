@@ -96,6 +96,23 @@ html, body, #root {
 /* A link the agent wrote: shown with its address, never followed. */
 .agent-link { color: var(--accent); }
 
+.code-editor {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.code-editor .cm-editor { max-height: 60vh; }
+.code-editor .cm-editor.cm-focused { outline: 1px solid var(--accent-dim); }
+.code-editor .cm-scroller { overflow: auto; }
+
+/* A proposed change, before the user applies it. */
+code.language-praxis-diff .diff-add  { color: #7ee2a8; background: rgba(46, 160, 67, 0.15); }
+code.language-praxis-diff .diff-del  { color: #ff9b9b; background: rgba(248, 81, 73, 0.15); }
+code.language-praxis-diff .diff-hunk { color: var(--text-secondary); }
+code.language-praxis-diff .diff-file { color: var(--text-secondary); }
+/* Wrapped, so nothing can hide at the end of a long line. */
+code.language-praxis-diff { white-space: pre-wrap; overflow-wrap: anywhere; }
+
 .workspace-error {
   max-width: 640px;
   padding: 10px 14px;
@@ -273,6 +290,11 @@ html, body, #root {
 }
 .praxis-button.borderless:hover { background: var(--bg-elevated); }
 .praxis-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Buttons side by side act on what is above them (Edit, Run, Undo): compact, not cards. */
+div[style*="flex-direction: row"] .praxis-button.default {
+  width: auto;
+  padding: 6px 16px;
+}
 .praxis-button:disabled { opacity: 0.5; cursor: default; }
 
 .a2ui-host label {

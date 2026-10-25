@@ -28,14 +28,14 @@ This document is the single source of truth for project progress. Every status u
 - [x] **M0.5** — Tauri canvas app scaffolded and renders a minimal A2UI payload
 - [x] **M0.6** — Backend agent service stood up (FastAPI + PydanticAI); Canvas renders its A2UI v0.9 output ([ADR-003](architecture/ADR-003-ui-wire-format.md))
 - [x] **M0.7** — LiteLLM proxy wired to Ollama (local) ✅ and one cloud provider (Anthropic or OpenAI) ✅ — Anthropic: `cloud-fast` (Claude Haiku 5.5) and `cloud-strong` (Claude Opus 5.5); one alias serves every turn, per-turn routing not yet
-- [x] **M0.8** — First MCP server (filesystem) integrated end-to-end — `praxis-fs`, read-only; write and move wait for M0.12
+- [x] **M0.8** — First MCP server (filesystem) integrated end-to-end — `praxis-fs`; writing came with M0.11, moving and deleting are not built
 - [x] **M0.9** — Conversation mode functional (chat, streaming, memory) — conversations stored locally; long-term vector memory not started
 - [x] **M0.10** — File mode functional (browse, preview, search via intent) — previews for text and images (PNG, JPEG, GIF, WebP); PDF previews not yet
-- [ ] **M0.11** — Code mode functional (open, edit, run a file with CodeMirror)
+- [x] **M0.11** — Code mode functional (open, edit, run a file with CodeMirror) — the model proposes changes as diffs the user applies; every write can be undone; files run in a bubblewrap sandbox (`praxis-run`, Linux only)
 - [x] **M0.12** — Privacy guardrails: audit log, cloud-call toast, kill switch hotkey (Esc, in the Canvas window; a system-wide hotkey comes with the Phase 1 session), deleting a conversation
-- [ ] **M0.13** — 90-second demo video published; pre-launch post drafted
+- [ ] **M0.13** — 90-second demo video published; pre-launch post drafted — demo script and setup in [`examples/90s-demo`](../examples/90s-demo/README.md), post drafted in [`docs/launch`](launch/pre-launch-post.md); the video is not recorded yet
 
-**Phase 0 progress: 10 / 13 milestones complete (~77%).**
+**Phase 0 progress: 11 / 13 milestones complete (~85%).** Exit criteria: the AppImage runs on Ubuntu 24.04 and Arch Linux ✅; the 90-second video is not recorded yet.
 
 ---
 

@@ -1,0 +1,35 @@
+[project]
+name = "praxis-run"
+version = "0.1.0"
+description = "Praxis code-running MCP server — runs a file the user picked in a bubblewrap sandbox"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = ["mcp>=2.0", "praxis-fs"]
+
+[project.scripts]
+praxis-run = "praxis_run.server:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.8"]
+
+[tool.uv.sources]
+# The same path rules as file access: what may be read may be run, nothing else.
+praxis-fs = { path = "../praxis-fs", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/praxis_run"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

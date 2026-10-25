@@ -4,6 +4,7 @@
 
 lint:
 	cd mcp-servers/praxis-fs && uv run ruff check . && uv run ruff format --check .
+	cd mcp-servers/praxis-run && uv run ruff check . && uv run ruff format --check .
 	cd agent && uv run ruff check . && uv run ruff format --check .
 	cd canvas && pnpm typecheck
 	# The Tauri build embeds canvas/dist, so it has to exist before cargo runs.
@@ -12,6 +13,8 @@ lint:
 
 test:
 	cd mcp-servers/praxis-fs && uv run pytest
+	# Runs code in the sandbox where bubblewrap works; skips those tests elsewhere.
+	cd mcp-servers/praxis-run && uv run pytest
 	cd agent && uv run pytest
 	cd canvas && pnpm test
 	# Needs canvas/dist, which `make lint` builds.

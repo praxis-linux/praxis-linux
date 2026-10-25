@@ -1,16 +1,24 @@
-"""Read-only access to the folders the user allows.
+"""Access to the folders the user allows: reading, and writing text files.
 
 Every path is resolved (following symlinks) and must land inside an allowed
 root. Hidden entries are neither listed nor readable unless hidden access is
 switched on: any name starting with a dot, which covers `.ssh`, `.env`, `.git`
 and Praxis's own `.praxis`, and on Windows anything with the hidden or system
 attribute, which covers `AppData`.
+
+A write never happens blind: changing a file needs the hash it had when it was
+read, and every write keeps what it replaced, so it can be undone. Whether the
+user agreed to a write is the caller's business; see the agent.
 """
 
 import base64
 import fnmatch
+import hashlib
+import json
 import os
 import re
+import secrets
+import shutil
 import stat
 import time
 from datetime import UTC, datetime, timedelta
@@ -24,8 +32,15 @@ MAX_ENTRIES = 200
 MAX_SCANNED = 50_000
 MAX_READ_BYTES = 64_000
 MAX_IMAGE_BYTES = 8_000_000
+MAX_WRITE_BYTES = 1_000_000
+# How long a write can be undone.
+BACKUP_DAYS = 30
 SEARCH_SECONDS = 10.0
 MAX_DAYS = 36_500
+
+# What undo_write accepts as a backup id: what _back_up makes, and nothing that
+# could name a path.
+_BACKUP_ID = re.compile(r"\d{8}T\d{6}-[0-9a-f]{8}")
 
 # Large, machine-generated trees that are never what the user is looking for.
 SKIPPED_DIRECTORIES = {"node_modules", "__pycache__"}
@@ -62,6 +77,9 @@ class FileText(BaseModel):
     size: int
     content: str
     truncated: bool
+    # Set when the whole file was read and is UTF-8 text: the hash write_text_file
+    # needs to change it.
+    sha256: str | None = None
 
 
 class ImageFile(BaseModel):
@@ -72,6 +90,22 @@ class ImageFile(BaseModel):
     data: str
 
 
+class Written(BaseModel):
+    path: str
+    size: int
+    sha256: str
+    # True when the file did not exist before.
+    created: bool
+    # What undo_write takes to put things back as they were.
+    backup: str
+
+
+class Undone(BaseModel):
+    path: str
+    # True when the write being undone had created the file, which is now gone again.
+    removed: bool
+
+
 def roots_from_env() -> list[Path]:
     """Allowed roots from PRAXIS_FS_ROOTS (os.pathsep-separated); the home folder by default."""
     raw = os.environ.get("PRAXIS_FS_ROOTS", "")
@@ -79,12 +113,21 @@ def roots_from_env() -> list[Path]:
     return roots or [Path.home()]
 
 
+def backups_from_env() -> Path:
+    """Where writes keep what they replaced: PRAXIS_FS_BACKUPS, or ~/.praxis/backups."""
+    raw = os.environ.get("PRAXIS_FS_BACKUPS", "").strip()
+    return Path(raw).expanduser() if raw else Path.home() / ".praxis" / "backups"
+
+
 class Files:
-    def __init__(self, roots: list[Path], *, allow_hidden: bool = False) -> None:
+    def __init__(
+        self, roots: list[Path], *, allow_hidden: bool = False, backups: Path | None = None
+    ) -> None:
         if not roots:
             raise ValueError("praxis-fs needs at least one allowed folder")
         self.roots = [root.resolve() for root in roots]
         self.allow_hidden = allow_hidden
+        self.backups = backups if backups is not None else backups_from_env()
 
     def resolve(self, path: str) -> Path:
         """The real path `path` names, if it is somewhere praxis-fs may read."""
@@ -186,12 +229,107 @@ class Files:
             data = handle.read(limit)
         if b"\0" in data:
             raise AccessError(f"{path} is not a text file.")
+        whole = size <= limit and len(data) == size
         return FileText(
             path=str(file),
             size=size,
             content=data.decode("utf-8", errors="replace"),
-            truncated=size > limit,
+            truncated=not whole,
+            sha256=_sha256(data) if whole and _is_utf8(data) else None,
         )
+
+    def write_text_file(
+        self, path: str, content: str, expected_sha256: str | None = None
+    ) -> Written:
+        """Write `content` to the file at `path`, keeping what it replaces.
+
+        With `expected_sha256` the file must exist and still have that hash; without
+        it the file must not exist yet, and is created. A file that used CRLF line
+        endings keeps them.
+        """
+        file = self.resolve(path)
+        data = content.encode("utf-8")
+        if len(data) > MAX_WRITE_BYTES:
+            raise AccessError(f"That is too much text to write ({len(data) // 1000} KB).")
+        if file.is_dir():
+            raise AccessError(f"{path} is a folder, not a file.")
+        if expected_sha256 is None:
+            if file.exists():
+                raise AccessError(f"{path} already exists, so it was not overwritten.")
+            if not file.parent.is_dir():
+                raise AccessError(f"There is no folder to put {path} in.")
+            old = None
+        else:
+            if not file.is_file():
+                raise AccessError(f"There is no file at {path} any more.")
+            old = file.read_bytes()
+            if _sha256(old) != expected_sha256:
+                raise AccessError(f"{path} has changed since it was opened, so it was not changed.")
+            if b"\r\n" in old and b"\r" not in data:
+                data = data.replace(b"\n", b"\r\n")
+        written = _sha256(data)
+        try:
+            backup = self._back_up(file, old, written)
+        except OSError as error:
+            raise AccessError(
+                f"No copy of {path} could be kept to undo with, so it was not changed."
+            ) from error
+        try:
+            _put(file, data, create=old is None)
+        except BaseException as error:
+            # Nothing was written, so there is nothing to undo.
+            shutil.rmtree(self.backups / backup, ignore_errors=True)
+            if isinstance(error, OSError):
+                raise AccessError(f"{path} could not be written ({error.strerror}).") from error
+            raise
+        return Written(
+            path=str(file), size=len(data), sha256=written, created=old is None, backup=backup
+        )
+
+    def undo_write(self, backup: str) -> Undone:
+        """Put a file back as it was before the write that made `backup`.
+
+        Refused if the file has changed since that write. A backup is used once.
+        """
+        folder = self.backups / backup
+        try:
+            if not _BACKUP_ID.fullmatch(backup):
+                raise OSError
+            record = json.loads((folder / "write.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise AccessError("There is no change with that id to undo.") from error
+        file = self.resolve(record["path"])
+        current = file.read_bytes() if file.is_file() else None
+        if current is None or _sha256(current) != record["sha256"]:
+            raise AccessError(f"{record['path']} has changed since, so the change was not undone.")
+        if record["created"]:
+            file.unlink()
+        else:
+            _put(file, (folder / "original").read_bytes(), create=False)
+        shutil.rmtree(folder, ignore_errors=True)
+        return Undone(path=str(file), removed=record["created"])
+
+    def _back_up(self, file: Path, old: bytes | None, written: str) -> str:
+        """Keep `old`, what `file` held before a write, under a new backup id."""
+        # Backups hold old versions of the user's files: only the user may read them.
+        self.backups.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.backups.mkdir(exist_ok=True, mode=0o700)
+        self._prune()
+        backup = f"{time.strftime('%Y%m%dT%H%M%S')}-{secrets.token_hex(4)}"
+        folder = self.backups / backup
+        folder.mkdir(mode=0o700)
+        if old is not None:
+            (folder / "original").write_bytes(old)
+        record = {"path": str(file), "sha256": written, "created": old is None}
+        (folder / "write.json").write_text(json.dumps(record), encoding="utf-8")
+        return backup
+
+    def _prune(self) -> None:
+        """Forget backups older than BACKUP_DAYS: they keep old file contents, secrets too."""
+        oldest = time.strftime("%Y%m%dT%H%M%S", time.localtime(time.time() - BACKUP_DAYS * 86_400))
+        for folder in self.backups.iterdir():
+            if _BACKUP_ID.fullmatch(folder.name) and folder.name < oldest:
+                shutil.rmtree(folder, ignore_errors=True)
 
     def read_image(self, path: str) -> ImageFile:
         """An image file's bytes, for showing it. Only PNG, JPEG, GIF and WebP, judged by
@@ -272,6 +410,72 @@ def _globs(pattern: str) -> list[str]:
         else:
             globs.append(f"*{part}*")
     return globs or ["*"]
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _is_utf8(data: bytes) -> bool:
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+# What a new file's permissions are cut down by, as for any other program. Read once.
+_UMASK = os.umask(0o022)
+os.umask(_UMASK)
+
+_EXCLUSIVE = (
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+)
+
+
+def _put(file: Path, data: bytes, *, create: bool) -> None:
+    """Make `file` hold `data` in one step: a reader sees the old file or the new, never half.
+
+    With `create` the file must not exist, and one that appears meanwhile is left
+    alone: a rename would overwrite it, a link does not.
+    """
+    temporary = file.with_name(f".{file.name}.praxis-{secrets.token_hex(8)}")
+    # Private until it is in place, since the text may be secret; never through a link.
+    descriptor = os.open(temporary, _EXCLUSIVE, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if not create:
+            shutil.copymode(file, temporary)
+            os.replace(temporary, file)
+            return
+        os.chmod(temporary, 0o666 & ~_UMASK)
+        try:
+            os.link(temporary, file)
+        except FileExistsError as error:
+            raise AccessError(
+                f"{file.name} appeared while it was being created, so it was not overwritten."
+            ) from error
+        except OSError:
+            # No hard links here (some network and FAT file systems): create it in place.
+            _create_in_place(file, data)
+        temporary.unlink()
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _create_in_place(file: Path, data: bytes) -> None:
+    try:
+        descriptor = os.open(file, _EXCLUSIVE, 0o666)
+    except FileExistsError as error:
+        raise AccessError(
+            f"{file.name} appeared while it was being created, so it was not overwritten."
+        ) from error
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(data)
 
 
 def _image_type(head: bytes) -> str | None:

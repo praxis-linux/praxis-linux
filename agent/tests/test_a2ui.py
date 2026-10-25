@@ -5,17 +5,21 @@ from pathlib import Path
 
 from praxis_agent.memory import TurnSummary
 from praxis_agent.tools.files import Entry, FileText, Listing
+from praxis_agent.tools.run import RunResult
 from praxis_agent.ui.a2ui import MAX_BLOCKS, MAX_CARDS, build_messages, build_trail
 from praxis_agent.ui.plan import (
     Card,
     CardsBlock,
     CodeBlock,
+    Editor,
     FormBlock,
     FormField,
+    Proposal,
+    Ran,
     Screen,
     TextBlock,
 )
-from sample_plan import SAMPLE_SCREEN
+from sample_plan import APP, SAMPLE_CODE_SCREEN, SAMPLE_SCREEN
 
 # Also read by canvas/src/a2ui/contract.test.tsx, which feeds them to the real renderer.
 GOLDEN = Path(__file__).parent / "golden" / "workspace_messages.json"
@@ -271,7 +275,7 @@ def test_a_file_is_shown_as_it_is_on_disk_inside_a_fence():
 
     assert components["f0_text"]["text"] == "```md\n# Title\n\n*not* rendered\n\n```"
     assert components["f0_head"]["text"] == "/home/ada/notes.md · 24 bytes"
-    assert components["f0"]["children"] == ["f0_head", "f0_text"]
+    assert components["f0"]["children"] == ["f0_head", "f0_actions", "f0_text"]
 
 
 def test_a_file_that_is_one_fenced_block_is_not_unwrapped():
@@ -329,3 +333,122 @@ def test_oversized_screens_are_truncated():
 def test_no_data_model_message_without_a_form():
     messages = build(screen(TextBlock(kind="text", text="hi")))
     assert not any("updateDataModel" in m for m in messages)
+
+
+# --- Code mode ---
+
+CODE_GOLDEN = Path(__file__).parent / "golden" / "code_messages.json"
+
+
+def test_code_mode_matches_golden():
+    assert matches_golden(build(SAMPLE_CODE_SCREEN), CODE_GOLDEN)
+
+
+def event(component):
+    return component["action"]["event"]
+
+
+def test_a_file_offers_edit_and_when_it_can_be_run_run():
+    file = FileText(path="/home/ada/app.py", size=12, content="print('hi')\n", truncated=False)
+
+    runnable = components_of(build(screen(file, can_run=[".py"])))
+    not_runnable = components_of(build(screen(file)))
+
+    assert runnable["f0_actions"]["children"] == ["f0_edit", "f0_run"]
+    assert event(runnable["f0_edit"]) == {"name": "edit", "context": {"target": "/home/ada/app.py"}}
+    assert event(runnable["f0_run"]) == {"name": "run", "context": {"target": "/home/ada/app.py"}}
+    assert not_runnable["f0_actions"]["children"] == ["f0_edit"]
+
+
+def test_a_file_too_long_to_edit_offers_no_edit():
+    big = FileText(path="/home/ada/big.log", size=10_000_000, content="x", truncated=True)
+
+    assert "f0_actions" not in components_of(build(screen(big)))
+
+
+def test_the_editor_is_bound_to_its_text_and_save_sends_it_with_the_hash_it_was_opened_at():
+    messages = build(SAMPLE_CODE_SCREEN)
+    components = components_of(messages)
+    (data,) = [m["updateDataModel"]["value"] for m in messages if "updateDataModel" in m]
+
+    editor = components["f1_code"]
+    assert editor["component"] == "CodeEditor"
+    assert editor["value"] == {"path": "/f1/content"}
+    assert editor["language"] == "python"
+    assert data == {"f1": {"content": "print('hi')\n"}}
+    assert event(components["f1_save"]) == {
+        "name": "save",
+        "context": {"target": APP, "base": "ab" * 32, "content": {"path": "/f1/content"}},
+    }
+    assert components["f1_save"]["variant"] == "primary"
+
+
+def test_the_editor_offers_run_only_for_files_that_can_be_run():
+    editor = Editor(path="/home/ada/notes.md", content="# x", sha256="cd" * 32)
+
+    components = components_of(build(screen(editor, can_run=[".py"])))
+
+    assert components["f0_actions"]["children"] == ["f0_save"]
+    assert components["f0_code"]["language"] == "markdown"
+    assert "f0_note" not in components
+
+
+def test_a_proposal_shows_its_diff_and_can_be_applied_or_discarded():
+    components = components_of(build(SAMPLE_CODE_SCREEN))
+
+    assert components["f2_head"]["text"] == "Proposed change to /home/ada/projects/app.py"
+    assert components["f2_diff"]["text"].startswith("```praxis-diff\n--- a/app.py")
+    assert event(components["f2_apply"]) == {"name": "apply", "context": {"proposal": "c0ffee"}}
+    assert event(components["f2_discard"]) == {"name": "discard", "context": {"proposal": "c0ffee"}}
+
+
+def test_a_new_file_is_proposed_as_such():
+    proposal = Proposal(id="1", path="/home/ada/new.py", diff="+x", created=True)
+
+    head = components_of(build(screen(proposal)))["f0_head"]["text"]
+
+    assert head == "Proposed new file /home/ada/new.py"
+
+
+def test_a_change_just_made_can_be_undone():
+    components = components_of(build(SAMPLE_CODE_SCREEN))
+
+    assert components["f0_text"]["text"] == "Saved /home/ada/projects/app.py."
+    assert event(components["f0_undo"]) == {
+        "name": "undo",
+        "context": {"backup": "20261025T120000-0a1b2c3d"},
+    }
+
+
+def test_a_run_shows_what_it_printed_and_how_it_ended():
+    components = components_of(build(SAMPLE_CODE_SCREEN))
+
+    assert components["f3_head"]["text"] == "$ python3 app.py · exit code 1 · 0.2 s"
+    assert components["f3_out"]["text"] == "```\nhi\n```"
+    assert components["f3_err"]["text"] == "```\nTraceback: boom\n```"
+    assert components["f3_actions"]["children"] == ["f3_again", "f3_edit"]
+
+
+def test_a_run_that_was_stopped_or_printed_nothing_says_so():
+    result = RunResult(
+        path="/home/ada/slow.py",
+        command="python3 slow.py",
+        exit_code=None,
+        stdout="",
+        stderr="",
+        timed_out=True,
+        truncated=False,
+        seconds=10.0,
+    )
+
+    components = components_of(build(screen(Ran(result=result))))
+
+    assert components["f0_head"]["text"] == "$ python3 slow.py · stopped: it took too long · 10.0 s"
+    assert components["f0_quiet"]["text"] == "It printed nothing."
+    assert components["f0_actions"]["children"] == ["f0_edit"]
+
+
+def test_the_model_cannot_pass_its_code_off_as_a_proposed_change():
+    fake = CodeBlock(kind="code", language="praxis-diff", code="+rm -rf ~")
+
+    assert components_of(build(screen(fake)))["b0"]["text"] == "```\n+rm -rf ~\n```"

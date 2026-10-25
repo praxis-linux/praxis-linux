@@ -25,7 +25,7 @@ This repository is intentionally early. Star the repo to follow along.
 |----------------|---------|
 | `canvas/`      | Tauri 2 + React desktop application — the Canvas |
 | `agent/`       | Python agent runtime (router, planner, file lookups over MCP, conversation store, audit log) |
-| `mcp-servers/` | First-party Model Context Protocol servers |
+| `mcp-servers/` | First-party Model Context Protocol servers: `praxis-fs` (files) and `praxis-run` (running a file in a sandbox) |
 | `components/`  | Planned Praxis components for the A2UI catalog |
 | `docs/`        | Architecture decisions and the roadmap |
 | `examples/`    | End-to-end demo flows |
@@ -47,9 +47,24 @@ Ctrl+C stops everything.
 
 **On Windows**, the desktop window is easiest through WSL: `--wsl` copies your working tree into WSL (Ubuntu-24.04 unless you name another distro) and starts everything there. Ollama can stay on Windows; your API keys are passed across. Inside WSL you need Rust, uv, Node with corepack and the Tauri prerequisites for Linux. The agent then reads your WSL home folder, not your Windows one. Building natively on Windows also works, but not with Smart App Control on: it blocks the helper programs a Rust build compiles and runs. To run the pieces yourself, see [`agent/README.md`](agent/README.md) and [`canvas/README.md`](canvas/README.md).
 
-Type an intent in the bar at the bottom — try "what is in my Documents folder?". The agent answers from a local model. It can look at the files in your home folder, hidden ones excepted, and cannot change any of them.
+Type an intent in the bar at the bottom — try "what is in my Documents folder?". The agent answers from a local model. It can look at the files in your home folder, hidden ones excepted. Open a file and press **Edit** to change it, or **Run** to run it (Linux, with bubblewrap installed). Ask the agent to change a file and it shows the change as a diff: nothing is written until you press **Apply**, and every change can be undone.
 
 To use a cloud model instead, set `ANTHROPIC_API_KEY` and add `--model cloud-fast` (Claude Haiku) or `--model cloud-strong` (Claude Opus). The file names and contents the agent looks at then go to Anthropic, and the Canvas says so before each request.
+
+### The AppImage
+
+Praxis also comes as one file for Linux, with the agent and the model proxy inside, on a Python of their own. The [AppImage workflow](.github/workflows/appimage.yml) builds it for every change to `main`; to build it yourself, run `scripts/build-appimage.sh`.
+
+```bash
+ollama pull qwen2.5:7b               # the local model; Ollama itself is not inside
+sudo apt install bubblewrap          # for Run (sudo pacman -S bubblewrap on Arch)
+chmod +x Praxis*.AppImage
+./Praxis*.AppImage
+```
+
+It needs a desktop Linux: it brings its own GTK and WebKit, and uses the system's graphics drivers, X11 or Wayland libraries and fonts, which every desktop install has. Tested on Ubuntu 24.04 and Arch Linux. Run uses the system's `python3`, `bash` and `node`.
+
+Settings are environment variables, as for the agent: `PRAXIS_MODEL=cloud-fast` with `ANTHROPIC_API_KEY` for a cloud model, `PRAXIS_FS_ROOTS` for the folders it may use. The window starts the agent and stops it when it closes; the agent's and the proxy's logs are in `~/.local/share/com.praxislinux.canvas/logs`. Without FUSE (in containers, or WSL), run it with `--appimage-extract-and-run`.
 
 ## Architecture in one diagram
 

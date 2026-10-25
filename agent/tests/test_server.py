@@ -16,8 +16,9 @@ from pydantic_ai.models.function import FunctionModel
 from praxis_agent import planner
 from praxis_agent.audit import AuditLog
 from praxis_agent.memory import Conversations
-from praxis_agent.server import _Workspace, create_app
+from praxis_agent.server import _Workspace, create_app, unified_diff
 from praxis_agent.tools.files import FileTools
+from praxis_agent.tools.run import RunnerStatus, RunResult, RunTools
 from praxis_agent.ui.plan import Screen, TextBlock
 from sample_plan import PIXEL_PNG, SAMPLE_REPLY
 
@@ -70,6 +71,28 @@ class FakeModel:
         return self.requests[index][-1].parts[-1].content
 
 
+class FakeRunner(RunTools):
+    """Stands in for praxis-run, which needs Linux: records what it is asked to run."""
+
+    def __init__(self):
+        super().__init__(None, RunnerStatus(available=True, reason="", suffixes=[".py"]))
+        self.ran = []
+        self.stdout = "hi\n"
+
+    async def run(self, request):
+        self.ran.append(request.path)
+        return RunResult(
+            path=request.path,
+            command="python3 app.py",
+            exit_code=0,
+            stdout=self.stdout,
+            stderr="",
+            timed_out=False,
+            truncated=False,
+            seconds=0.1,
+        )
+
+
 @pytest.fixture(autouse=True)
 def every_draft_is_drawn(monkeypatch):
     # The fake model answers faster than a person could watch; draw every draft anyway.
@@ -102,13 +125,23 @@ def memory(tmp_path):
 
 
 @pytest.fixture
-def make_client(audit, memory, model, home):
+def runner():
+    return FakeRunner()
+
+
+@pytest.fixture
+def make_client(audit, memory, model, home, runner, tmp_path):
     """A client for a fresh agent process that shares the databases of the others."""
 
     @asynccontextmanager
     async def in_process_praxis_fs():
-        async with Client(build_server(Files([home]))) as mcp_client:
+        files = Files([home], backups=tmp_path / "backups")
+        async with Client(build_server(files)) as mcp_client:
             yield await FileTools.connect(mcp_client)
+
+    @asynccontextmanager
+    async def fake_praxis_run():
+        yield runner
 
     def make():
         app = create_app(
@@ -116,6 +149,7 @@ def make_client(audit, memory, model, home):
             conversations=Conversations(memory.path),
             model_for=model.for_alias,
             connect_files=in_process_praxis_fs,
+            connect_runner=fake_praxis_run,
         )
         return TestClient(app, base_url=AGENT_URL)
 
@@ -1072,3 +1106,462 @@ def test_praxis_fs_is_started_and_reached_over_stdio(audit, memory, model, home,
         )
 
     assert workspace(response)["f0_e0_name"]["text"] == "plan.md"
+
+
+# --- Code mode: edit, save, run, proposed changes, undo --------------------
+
+
+def act(client, name, context, session=SESSION):
+    return client.post("/action", json=action(name, context), headers=session)
+
+
+def errors(response):
+    return [e["message"] for e in events(response) if e["type"] == "error"]
+
+
+def editor_of(response):
+    """The editor's component and the text it holds, as the Canvas would have them."""
+    state = surfaces(response)["workspace"]
+    (code_id,) = [i for i, c in state["components"].items() if c["component"] == "CodeEditor"]
+    block = code_id.removesuffix("_code")
+    return state["components"], state["data"][block]["content"], block
+
+
+def save_context(response, content):
+    components, _, block = editor_of(response)
+    context = dict(components[f"{block}_save"]["action"]["event"]["context"])
+    context["content"] = content
+    return context
+
+
+def test_edit_opens_the_file_in_the_editor_without_a_model(client, model, audit, home):
+    response = act(client, "edit", {"target": str(home / "app.py")})
+
+    components, content, block = editor_of(response)
+    assert content == "print('hi')\n"
+    assert modes(response) == ["code"]
+    assert components[f"{block}_run"]["action"]["event"]["name"] == "run"
+    assert model.requests == []
+    (call,) = rows(audit, "tool_calls")
+    assert (call["tool"], call["asked_by"], call["status"]) == ("read_text_file", "user", "ok")
+    assert json.loads(call["arguments"])["max_bytes"] == 64_000
+
+
+def test_saving_writes_what_is_in_the_editor_and_offers_undo(client, audit, home):
+    opened = act(client, "edit", {"target": str(home / "app.py")})
+
+    saved = act(client, "save", save_context(opened, "print('bye')\n"))
+
+    assert errors(saved) == []
+    assert (home / "app.py").read_bytes() == b"print('bye')\n"
+    components, content, _ = editor_of(saved)
+    assert content == "print('bye')\n"
+    assert components["f0_text"]["text"].startswith("Saved ")
+    write = rows(audit, "tool_calls")[-1]
+    assert (write["tool"], write["asked_by"]) == ("write_text_file", "user")
+    # The audit log says how much was written, never what.
+    assert "bye" not in write["arguments"]
+    assert json.loads(write["arguments"])["chars"] == 13
+
+
+def test_saving_twice_from_the_editor_works_because_it_learns_the_new_hash(client, home):
+    first = act(
+        client, "save", save_context(act(client, "edit", {"target": str(home / "app.py")}), "a\n")
+    )
+
+    second = act(client, "save", save_context(first, "b\n"))
+
+    assert errors(second) == []
+    assert (home / "app.py").read_bytes() == b"b\n"
+
+
+def test_a_save_over_a_change_made_elsewhere_is_refused(client, home):
+    opened = act(client, "edit", {"target": str(home / "app.py")})
+    (home / "app.py").write_bytes(b"changed elsewhere\n")
+
+    saved = act(client, "save", save_context(opened, "mine\n"))
+
+    assert errors(saved) == [
+        f"{home / 'app.py'} has changed since it was opened, so it was not changed."
+    ]
+    assert (home / "app.py").read_bytes() == b"changed elsewhere\n"
+
+
+def test_undo_puts_the_file_back(client, home):
+    saved = act(
+        client, "save", save_context(act(client, "edit", {"target": str(home / "app.py")}), "x\n")
+    )
+    undo = surfaces(saved)["workspace"]["components"]["f0_undo"]["action"]["event"]
+
+    undone = act(client, undo["name"], undo["context"])
+
+    assert errors(undone) == []
+    assert (home / "app.py").read_bytes() == b"print('hi')\n"
+    assert workspace(undone)["b0"]["text"] == "Undone: app.py is back as it was."
+
+
+def test_hidden_files_cannot_be_edited_or_saved(client, home):
+    edit = act(client, "edit", {"target": str(home / ".env")})
+    save = act(client, "save", {"target": str(home / ".env"), "base": "0" * 64, "content": "x"})
+
+    assert "hidden" in errors(edit)[0]
+    assert "hidden" in errors(save)[0]
+    assert (home / ".env").read_bytes() == b"SECRET=1"
+
+
+@pytest.mark.parametrize(
+    "name,context",
+    [
+        ("edit", {}),
+        ("save", {"target": "app.py", "content": "x"}),
+        ("save", {"target": "app.py", "base": "abc"}),
+        ("apply", {}),
+        ("undo", {"backup": 3}),
+    ],
+)
+def test_a_malformed_file_action_is_rejected(client, audit, name, context):
+    response = act(client, name, context)
+
+    assert response.status_code == 400
+    assert rows(audit, "tool_calls") == []
+
+
+def test_run_shows_what_the_file_printed(client, runner, audit, model, home):
+    response = act(client, "run", {"target": str(home / "app.py")})
+
+    components = workspace(response)
+    assert runner.ran == [str(home / "app.py")]
+    assert components["f0_out"]["text"] == "```\nhi\n```"
+    assert modes(response) == ["code"]
+    assert model.requests == []
+    (call,) = rows(audit, "tool_calls")
+    assert (call["tool"], call["asked_by"], call["status"]) == ("run_file", "user", "ok")
+
+
+def test_where_nothing_can_be_run_there_is_no_run_button_and_run_says_why(client, runner, home):
+    runner.status = RunnerStatus(available=False, reason="Running code needs Linux.", suffixes=[])
+
+    opened = act(client, "edit", {"target": str(home / "app.py")})
+    ran = act(client, "run", {"target": str(home / "app.py")})
+
+    assert "f0_run" not in workspace(opened)
+    assert errors(ran) == ["Running code needs Linux."]
+    assert runner.ran == []
+
+
+def test_the_model_is_told_what_a_run_printed(client, runner, model, home):
+    runner.stdout = "Traceback: NameError\n"
+    act(client, "run", {"target": str(home / "app.py")})
+
+    ask(client, "why did that fail?")
+
+    prompt = model.prompt()
+    assert "the result of running app.py: it exited with code 0" in prompt
+    assert "Traceback: NameError" in prompt
+
+
+def propose(path, content, summary="Say bye instead."):
+    return {"step": {"do": "propose_edit", "path": path, "summary": summary, "content": content}}
+
+
+def test_a_proposed_change_is_shown_as_a_diff_and_not_made(client, model, home):
+    model.script = [propose("app.py", "print('bye')\n")]
+
+    response = ask(client, "make it say bye")
+
+    assert "Writing a change to app.py…" in statuses(response)
+    components = workspace(response)
+    assert components["b0"]["text"] == "Say bye instead."
+    diff = components["f0_diff"]["text"]
+    assert "-print('hi')" in diff and "+print('bye')" in diff
+    assert components["f0_apply"]["action"]["event"]["name"] == "apply"
+    assert (home / "app.py").read_bytes() == b"print('hi')\n"
+
+
+def test_applying_a_proposed_change_makes_it_once(client, model, audit, home):
+    model.script = [propose("app.py", "print('bye')\n")]
+    apply = workspace(ask(client, "make it say bye"))["f0_apply"]["action"]["event"]
+
+    applied = act(client, apply["name"], apply["context"])
+    again = act(client, apply["name"], apply["context"])
+
+    assert errors(applied) == []
+    assert (home / "app.py").read_bytes() == b"print('bye')\n"
+    assert "no longer waiting" in errors(again)[0]
+    write = [r for r in rows(audit, "tool_calls") if r["tool"] == "write_text_file"]
+    assert [(w["asked_by"], w["status"]) for w in write] == [("user", "ok")]
+
+
+def test_a_proposed_change_is_not_applied_over_a_later_change(client, model, home):
+    model.script = [propose("app.py", "print('bye')\n")]
+    apply = workspace(ask(client, "make it say bye"))["f0_apply"]["action"]["event"]
+    (home / "app.py").write_bytes(b"edited by hand\n")
+
+    applied = act(client, apply["name"], apply["context"])
+
+    assert "has changed since" in errors(applied)[0]
+    assert (home / "app.py").read_bytes() == b"edited by hand\n"
+
+
+def test_a_discarded_change_cannot_be_applied(client, model, home):
+    model.script = [propose("app.py", "print('bye')\n")]
+    components = workspace(ask(client, "make it say bye"))
+    discard = components["f0_discard"]["action"]["event"]
+    apply = components["f0_apply"]["action"]["event"]
+
+    discarded = act(client, discard["name"], discard["context"])
+    applied = act(client, apply["name"], apply["context"])
+
+    assert workspace(discarded)["b0"]["text"] == "Discarded. Nothing was changed."
+    assert "no longer waiting" in errors(applied)[0]
+    assert (home / "app.py").read_bytes() == b"print('hi')\n"
+
+
+def test_a_new_file_can_be_proposed_applied_and_undone(client, model, home):
+    model.script = [propose("docs/hello.py", "print('hello')\n", "A greeting.")]
+    response = ask(client, "create docs/hello.py that says hello")
+    components = workspace(response)
+    assert components["f0_head"]["text"].startswith("Proposed new file ")
+    assert components["title"]["text"] == "New file hello.py"
+
+    apply = components["f0_apply"]["action"]["event"]
+    applied = act(client, apply["name"], apply["context"])
+    assert (home / "docs" / "hello.py").read_bytes() == b"print('hello')\n"
+
+    undo = workspace(applied)["f0_undo"]["action"]["event"]
+    undone = act(client, undo["name"], undo["context"])
+    assert not (home / "docs" / "hello.py").exists()
+    assert workspace(undone)["b0"]["text"] == "Undone: docs/hello.py is removed again."
+
+
+def test_a_change_to_a_hidden_file_is_not_even_proposed(client, model, home):
+    model.script = [propose(".env", "SECRET=2")]
+
+    components = workspace(ask(client, "change my .env"))
+
+    assert components["b1"]["text"].startswith("Not changed: ")
+    assert "hidden" in components["b1"]["text"]
+    assert not any(
+        c.get("action", {}).get("event", {}).get("name") == "apply" for c in components.values()
+    )
+
+
+def test_a_file_longer_than_the_model_can_see_is_not_changed(client, model, home):
+    (home / "long.py").write_bytes(b"x = 1\n" * 2000)
+    model.script = [propose("long.py", "x = 2\n")]
+
+    components = workspace(ask(client, "change long.py"))
+
+    assert "longer than Praxis can change yet" in components["b1"]["text"]
+    assert (home / "long.py").read_bytes() == b"x = 1\n" * 2000
+
+
+def test_a_proposal_that_changes_nothing_says_so(client, model, home):
+    model.script = [propose("app.py", "print('hi')\n")]
+
+    components = workspace(ask(client, "change nothing"))
+
+    assert components["b1"]["text"] == "Not changed: the proposed text is the same as the file."
+
+
+def test_the_model_is_told_a_proposal_is_waiting(client, model, home):
+    model.script = [propose("app.py", "print('bye')\n")]
+    ask(client, "make it say bye")
+
+    ask(client, "is it done?")
+
+    assert "a proposed change to app.py, which the user has not applied" in model.prompt()
+
+
+def test_a_file_the_model_read_can_be_edited_and_run_from_the_reply(client, model, home):
+    model.script = [
+        {"step": {"do": "read_text_file", "path": "app.py"}},
+        reply(text("Here it is.")),
+    ]
+
+    components = workspace(ask(client, "show app.py"))
+
+    assert components["f0_actions"]["children"] == ["f0_edit", "f0_run"]
+
+
+def test_forgetting_a_conversation_drops_its_proposed_changes(client, model, home):
+    model.script = [propose("app.py", "print('bye')\n")]
+    apply = workspace(ask(client, "make it say bye"))["f0_apply"]["action"]["event"]
+
+    client.post("/forget", headers=SESSION)
+    applied = act(client, apply["name"], apply["context"])
+
+    assert "no longer waiting" in errors(applied)[0]
+    assert (home / "app.py").read_bytes() == b"print('hi')\n"
+
+
+def test_a_proposal_keeps_the_files_final_line_break(client, model, home):
+    model.script = [propose("app.py", "print('bye')")]
+    apply = workspace(ask(client, "make it say bye"))["f0_apply"]["action"]["event"]
+
+    act(client, apply["name"], apply["context"])
+
+    assert (home / "app.py").read_bytes() == b"print('bye')\n"
+
+
+# --- The token shared with the Canvas that started the agent ----------------
+
+
+@pytest.fixture
+def guarded(audit, memory, model, home, runner, tmp_path):
+    @asynccontextmanager
+    async def files():
+        async with Client(build_server(Files([home], backups=tmp_path / "backups"))) as mcp:
+            yield await FileTools.connect(mcp)
+
+    @asynccontextmanager
+    async def run():
+        yield runner
+
+    app = create_app(
+        audit=audit,
+        conversations=memory,
+        model_for=model.for_alias,
+        connect_files=files,
+        connect_runner=run,
+        token="s3cret-token",
+    )
+    with TestClient(app, base_url=AGENT_URL) as test_client:
+        yield test_client
+
+
+def test_with_a_token_a_request_without_it_is_refused(guarded, model, audit, home):
+    asked = ask(guarded, "hello")
+    saved = guarded.post(
+        "/action",
+        json=action("save", {"target": str(home / "app.py"), "base": "0" * 64, "content": "x"}),
+        headers=SESSION,
+    )
+    wrong = ask(guarded, "hello", session={**SESSION, "X-Praxis-Token": "guess"})
+
+    assert [asked.status_code, saved.status_code, wrong.status_code] == [401, 401, 401]
+    assert model.requests == []
+    assert rows(audit, "tool_calls") == []
+    assert (home / "app.py").read_bytes() == b"print('hi')\n"
+
+
+def test_with_the_token_the_agent_answers(guarded):
+    response = ask(guarded, "hello", session={**SESSION, "X-Praxis-Token": "s3cret-token"})
+
+    assert response.status_code == 200
+    assert modes(response) == ["conversation"]
+
+
+def test_health_and_cors_preflight_need_no_token(guarded):
+    preflight = guarded.options(
+        "/intent",
+        headers={
+            "Origin": "tauri://localhost",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,x-praxis-session,x-praxis-token",
+        },
+    )
+
+    assert guarded.get("/health").status_code == 200
+    assert preflight.status_code == 200
+    assert "x-praxis-token" in preflight.headers["access-control-allow-headers"].lower()
+
+
+# --- What a diff must not hide ------------------------------------------------
+
+
+def test_a_change_hidden_in_another_kind_of_line_break_shows_in_the_diff():
+    # Python reads this as one line: the check becomes part of the comment.
+    diff, invisible = unified_diff("# verify\ncheck()\n", "# verify\x1ccheck()\n", "x.py")
+
+    assert "+# verify⟨U+001C⟩check()" in diff
+    assert invisible == 1
+
+
+def test_bidirectional_and_zero_width_characters_are_written_out():
+    diff, invisible = unified_diff("ok = 1\n", "ok = 1 \u202e# \u200b\n", "x.py")
+
+    assert "+ok = 1 ⟨U+202E⟩# ⟨U+200B⟩" in diff
+    assert invisible == 2
+
+
+def test_trailing_whitespace_is_visible_on_changed_lines():
+    diff, _ = unified_diff("x = 1\n", "x = 1 \t\n", "x.py")
+
+    assert "+x = 1·→" in diff.split("\n")
+
+
+def test_crlf_files_are_compared_line_by_line_not_as_one_change():
+    diff, _ = unified_diff("a\r\nb\r\n", "a\nc\n", "x.py")
+
+    assert "-b" in diff.split("\n") and "+c" in diff.split("\n")
+    assert " a" in diff.split("\n")
+
+
+def test_a_proposal_with_invisible_characters_carries_a_warning(client, model, home):
+    model.script = [propose("app.py", "print('hi')\x0bprint('more')\n")]
+
+    components = workspace(ask(client, "change it"))
+
+    warnings = [c["text"] for c in components.values() if c.get("text", "").startswith("Careful")]
+    assert warnings == [
+        "Careful: the new text holds 1 invisible or control character, shown as ⟨U+…⟩. "
+        "They can change what code does without showing in an editor."
+    ]
+
+
+def test_the_audit_log_says_which_file_an_undo_put_back(client, audit, home):
+    saved = act(
+        client, "save", save_context(act(client, "edit", {"target": str(home / "app.py")}), "x\n")
+    )
+    undo = surfaces(saved)["workspace"]["components"]["f0_undo"]["action"]["event"]
+
+    act(client, undo["name"], undo["context"])
+
+    (call,) = [r for r in rows(audit, "tool_calls") if r["tool"] == "undo_write"]
+    assert json.loads(call["arguments"])["path"] == str(home / "app.py")
+
+
+def test_a_refusal_during_a_proposal_turn_is_still_shown(client, model, home):
+    model.script = [
+        {"step": {"do": "read_text_file", "path": ".env"}},
+        propose("app.py", "print('bye')\n"),
+    ]
+
+    components = workspace(ask(client, "use my .env to change app.py"))
+
+    notes = [c["text"] for c in components.values() if c.get("text", "").startswith("Not read")]
+    assert len(notes) == 1 and "hidden" in notes[0]
+    assert "f0_apply" in components
+
+
+def test_the_kill_switch_stops_a_file_action_too(client, runner, home):
+    started = threading.Event()
+
+    async def slow_run(request):
+        started.set()
+        await asyncio.sleep(30)
+
+    runner.run = slow_run
+    result = {}
+
+    def run_it():
+        result["response"] = act(client, "run", {"target": str(home / "app.py")})
+
+    worker = threading.Thread(target=run_it)
+    worker.start()
+    assert started.wait(5)
+    stopped = client.post("/stop", headers=SESSION).json()
+    worker.join(10)
+
+    assert stopped == {"stopped": 1}
+    assert not worker.is_alive()
+
+
+def test_a_proposal_fenced_like_a_reply_is_unwrapped(client, model, home):
+    model.script = [propose("app.py", "```python\nprint('bye')\n```")]
+    apply = workspace(ask(client, "make it say bye"))["f0_apply"]["action"]["event"]
+
+    act(client, apply["name"], apply["context"])
+
+    assert (home / "app.py").read_bytes() == b"print('bye')\n"

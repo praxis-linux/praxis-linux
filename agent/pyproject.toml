@@ -12,6 +12,7 @@ dependencies = [
     "pydantic-ai-slim[openai]>=2.0",
     "mcp>=2.0",
     "praxis-fs",
+    "praxis-run",
 ]
 
 [dependency-groups]
@@ -19,6 +20,7 @@ dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.8"]
 
 [tool.uv.sources]
 praxis-fs = { path = "../mcp-servers/praxis-fs", editable = true }
+praxis-run = { path = "../mcp-servers/praxis-run", editable = true }
 
 [build-system]
 requires = ["hatchling"]

@@ -283,6 +283,33 @@
           "variant": "caption"
         },
         {
+          "id": "f1_edit_label",
+          "component": "Text",
+          "text": "Edit"
+        },
+        {
+          "id": "f1_edit",
+          "component": "Button",
+          "variant": "default",
+          "child": "f1_edit_label",
+          "action": {
+            "event": {
+              "name": "edit",
+              "context": {
+                "target": "/home/ada/projects/notes.md"
+              }
+            }
+          }
+        },
+        {
+          "id": "f1_actions",
+          "component": "Row",
+          "children": [
+            "f1_edit"
+          ],
+          "align": "center"
+        },
+        {
           "id": "f1_text",
           "component": "Text",
           "text": "```md\n# Notes\n\n- *ship* the demo\n\n```",
@@ -293,6 +320,7 @@
           "component": "Column",
           "children": [
             "f1_head",
+            "f1_actions",
             "f1_text"
           ]
         },

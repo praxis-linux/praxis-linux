@@ -1,16 +1,19 @@
 """Turns an intent into a screen, one model step at a time.
 
-Each step the model either asks for a file lookup or replies. Both are the same
-schema-constrained output, so a small local model cannot produce a malformed
-lookup any more than a malformed reply. Provider function calling is not used:
-with a 7B model it either never fired (under constrained output) or looped.
+Each step the model either asks for a file lookup, proposes a change to a file,
+or replies. All are the same schema-constrained output, so a small local model
+cannot produce a malformed lookup any more than a malformed reply. A proposed
+change is never made here: it ends the turn, and the user decides. Provider function
+calling is not used: with a 7B model it either never fired (under constrained output)
+or looped.
 """
 
 import os
 import time
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import Annotated, Any
+from pathlib import PurePath
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from pydantic_ai import Agent
@@ -49,20 +52,28 @@ want and you reply. Your reply is shown to them as a title and a list of blocks.
 That is only how the reply is displayed, not a topic: do not talk about it.
 
 What you can do right now: answer questions and explain things from your own
-knowledge, write code or text for the user to use, and look at the user's files.
-What you cannot do yet: change, move or delete files; run code or commands; change
-settings. When a request needs one of those, say in one sentence that Praxis cannot
-do that yet, then offer what you can do.
+knowledge, write code or text for the user to use, look at the user's files, and
+propose a change to a text file or a new file, which the user then applies or not.
+The user can run a Python, shell or JavaScript file themselves with the Run button
+under it; you cannot run anything. What you cannot do yet: move, rename or delete
+files; run commands; change settings. When a request needs one of those, say in one
+sentence that Praxis cannot do that yet, then offer what you can do.
 
 Each of your answers is one step:
 - a lookup: search_files to find files by name, recent_files to find files changed
   lately, list_directory to see a folder, read_text_file to read a file. You are
   then given the result and asked for the next step.
+- propose_edit to change a text file or create a new one, when the user asks for
+  that: give the file's complete new text, not just the part that changes. Read the
+  file with read_text_file first, in the same turn, even if you read it before: the
+  user may have changed it since. A new file needs no reading. The user is shown the
+  change and applies it or not, so never say it is done.
 - reply to answer the user.
 Look things up before replying whenever the request is to find, show, read or
 summarise the user's files or folders. Do not look anything up for general questions,
-or for requests to change, move or delete something: reply that Praxis cannot do
-that yet.
+or for requests to move or delete something: reply that Praxis cannot do that yet.
+When the user asks for code without naming a file, reply with a code block.
+If the user asks you to run a file, say that the Run button under the file runs it.
 All paths are relative to the user's main folder: 'Documents' is their Documents
 folder, 'Documents/notes.txt' a file in it, and an empty path is the main folder itself.
 There is no 'recent' folder: recent_files is how to find what was changed lately.
@@ -90,9 +101,18 @@ are natural follow-ups.
 """
 
 
+class ProposeEdit(BaseModel):
+    """Change a text file, or create one. The user is shown the change and decides."""
+
+    do: Literal["propose_edit"]
+    path: str = Field(description="The file, e.g. 'code/app.py'. A new file if it does not exist.")
+    summary: str = Field(description="One sentence: what the change does.")
+    content: str = Field(description="The file's complete new text, not just the changed part.")
+
+
 class Step(BaseModel):
     step: Annotated[
-        SearchFiles | RecentFiles | ListDirectory | ReadTextFile | UIPlan,
+        SearchFiles | RecentFiles | ListDirectory | ReadTextFile | ProposeEdit | UIPlan,
         Field(discriminator="do"),
     ]
 
@@ -124,7 +144,15 @@ class Draft:
 
 
 @dataclass
+class Proposing:
+    """The model has started writing a change to the file at `path`."""
+
+    path: str
+
+
+@dataclass
 class Turn:
+    # When the model proposed a change, a reply made from its summary.
     reply: UIPlan
     # What was looked up on the way, in order.
     found: list[Listing | FileText]
@@ -133,12 +161,14 @@ class Turn:
     # What the model was sent and answered during this turn only.
     messages: list[ModelMessage]
     requests: int
+    # The change the model proposed, if it ended the turn with one.
+    proposal: ProposeEdit | None = None
 
     def screen(self) -> Screen:
         return compose(self.reply, self.found, self.refused)
 
 
-Event = Looking | Draft | Turn
+Event = Looking | Draft | Proposing | Turn
 
 
 def compose(
@@ -213,9 +243,9 @@ async def plan(
 ) -> AsyncIterator[Event]:
     """Run one turn: let the model look things up with `lookup`, then reply.
 
-    Yields a `Looking` before each lookup, `Draft`s while the reply is being written,
-    and finally the `Turn`. `main_folder` is the folder the model's relative paths
-    start from.
+    Yields a `Looking` before each lookup, `Draft`s while the reply is being written
+    or a `Proposing` once a proposed change is under way, and finally the `Turn`.
+    `main_folder` is the folder the model's relative paths start from.
     """
     found: list[Listing | FileText] = []
     refused: list[str] = []
@@ -235,13 +265,31 @@ async def plan(
             async for node in run:
                 if Agent.is_model_request_node(node):
                     async with node.stream(run.ctx) as stream:
-                        async for reply in _replies_so_far(stream, output_type):
-                            yield Draft(compose(reply, found, refused, partial=True))
+                        async for so_far in _steps_so_far(stream, output_type):
+                            if isinstance(so_far, Proposing):
+                                yield so_far
+                            else:
+                                yield Draft(compose(so_far, found, refused, partial=True))
             result = run.result
         assert result is not None
         requests += result.usage.requests
         history = result.all_messages()
         step = result.output.step
+        if isinstance(step, ProposeEdit):
+            yield Turn(
+                reply=UIPlan(
+                    do="reply",
+                    mode="code",
+                    title=f"Change to {PurePath(step.path).name or step.path}",
+                    blocks=[TextBlock(kind="text", text=step.summary or "A proposed change.")],
+                ),
+                found=found,
+                refused=refused,
+                messages=history[start:],
+                requests=requests,
+                proposal=step,
+            )
+            return
         if isinstance(step, UIPlan):
             yield Turn(
                 reply=step,
@@ -280,16 +328,18 @@ async def plan(
     raise AssertionError("the final step can only be a reply")
 
 
-async def _replies_so_far(
+async def _steps_so_far(
     stream: AsyncIterable[Any], output_type: type[Step] | type[FinalStep]
-) -> AsyncIterator[UIPlan]:
-    """The reply as far as the model has written it, as it streams in.
+) -> AsyncIterator[UIPlan | Proposing]:
+    """The reply as far as the model has written it, as it streams in; or, once, that
+    it is writing a proposed change.
 
     Nothing is yielded for a step that turns out to be a lookup.
     """
     schema: TypeAdapter[Step | FinalStep] = TypeAdapter(output_type)
     text = ""
     last = 0.0
+    proposing = False
     async for event in stream:
         if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
             text = event.part.content
@@ -306,3 +356,7 @@ async def _replies_so_far(
         if isinstance(step, UIPlan):
             last = time.monotonic()
             yield step
+        # The path is whole once the summary has begun.
+        elif isinstance(step, ProposeEdit) and step.summary and not proposing:
+            proposing = True
+            yield Proposing(step.path)

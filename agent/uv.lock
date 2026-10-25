@@ -696,6 +696,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "mcp" },
     { name = "praxis-fs" },
+    { name = "praxis-run" },
     { name = "pydantic" },
     { name = "pydantic-ai-slim", extra = ["openai"] },
     { name = "uvicorn" },
@@ -713,6 +714,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "mcp", specifier = ">=2.0" },
     { name = "praxis-fs", editable = "../mcp-servers/praxis-fs" },
+    { name = "praxis-run", editable = "../mcp-servers/praxis-run" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-ai-slim", extras = ["openai"], specifier = ">=2.0" },
     { name = "uvicorn", specifier = ">=0.32" },
@@ -735,6 +737,27 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "mcp", specifier = ">=2.0" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8" },
+    { name = "ruff", specifier = ">=0.8" },
+]
+
+[[package]]
+name = "praxis-run"
+version = "0.1.0"
+source = { editable = "../mcp-servers/praxis-run" }
+dependencies = [
+    { name = "mcp" },
+    { name = "praxis-fs" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mcp", specifier = ">=2.0" },
+    { name = "praxis-fs", editable = "../mcp-servers/praxis-fs" },
+]
 
 [package.metadata.requires-dev]
 dev = [

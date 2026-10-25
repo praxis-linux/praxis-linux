@@ -1,0 +1,57 @@
+name: AppImage
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - scripts/build-appimage.sh
+      - canvas/src-tauri/**
+      - .github/workflows/appimage.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  appimage:
+    # An AppImage needs a glibc at least as new as the one it was built with: build
+    # on the oldest Ubuntu there is a runner for.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: canvas/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: canvas/pnpm-lock.yaml
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev file xvfb
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: scripts/build-appimage.sh
+
+      # The packaged app must start its own agent, and that agent must want its token.
+      - name: Smoke test
+        run: |
+          app=$(ls canvas/src-tauri/target/release/bundle/appimage/*.AppImage)
+          chmod +x "$app"
+          APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a "$app" &
+          for _ in $(seq 90); do curl -sf http://127.0.0.1:7729/health && break; sleep 1; done
+          curl -sf http://127.0.0.1:7729/health
+          status=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:7729/resume -H "X-Praxis-Session: smoke-test-1")
+          test "$status" = 401
+          pkill -f praxis-canvas || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: praxis-appimage
+          path: canvas/src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error

@@ -81,9 +81,15 @@ export class CanvasSession {
     });
     this.processor.onSurfaceDeleted(() => this.syncSurfaces());
     this.applyAll(WELCOME_MESSAGES);
-    // Pick up where this conversation left off. Without the agent, the welcome
-    // screen stays, and nothing is reported until the user asks for something.
-    void this.run((signal) => this.agent.resume(this.conversation, signal), { quiet: true });
+    // Pick up where this conversation left off, once the agent is up. Without the
+    // agent, the welcome screen stays, and nothing is reported until the user asks
+    // for something.
+    void this.agent.ready().then(() => {
+      // Unless the user has asked for something meanwhile.
+      if (!this.turn) {
+        void this.run((signal) => this.agent.resume(this.conversation, signal), { quiet: true });
+      }
+    });
   }
 
   subscribe = (listener: () => void) => {

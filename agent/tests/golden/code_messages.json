@@ -1,0 +1,340 @@
+[
+  {
+    "version": "v0.9",
+    "deleteSurface": {
+      "surfaceId": "workspace"
+    }
+  },
+  {
+    "version": "v0.9",
+    "createSurface": {
+      "surfaceId": "workspace",
+      "catalogId": "praxis-linux:catalog:phase0"
+    }
+  },
+  {
+    "version": "v0.9",
+    "updateComponents": {
+      "surfaceId": "workspace",
+      "components": [
+        {
+          "id": "root",
+          "component": "Column",
+          "children": [
+            "title",
+            "f0",
+            "f1",
+            "f2",
+            "f3"
+          ]
+        },
+        {
+          "id": "title",
+          "component": "Text",
+          "text": "app.py",
+          "variant": "h2"
+        },
+        {
+          "id": "f0_text",
+          "component": "Text",
+          "text": "Saved /home/ada/projects/app.py.",
+          "variant": "caption"
+        },
+        {
+          "id": "f0_undo_label",
+          "component": "Text",
+          "text": "Undo"
+        },
+        {
+          "id": "f0_undo",
+          "component": "Button",
+          "variant": "default",
+          "child": "f0_undo_label",
+          "action": {
+            "event": {
+              "name": "undo",
+              "context": {
+                "backup": "20261025T120000-0a1b2c3d"
+              }
+            }
+          }
+        },
+        {
+          "id": "f0_actions",
+          "component": "Row",
+          "children": [
+            "f0_undo"
+          ],
+          "align": "center"
+        },
+        {
+          "id": "f0",
+          "component": "Row",
+          "children": [
+            "f0_text",
+            "f0_actions"
+          ],
+          "align": "center"
+        },
+        {
+          "id": "f1_head",
+          "component": "Text",
+          "text": "/home/ada/projects/app.py · 12 bytes",
+          "variant": "caption"
+        },
+        {
+          "id": "f1_code",
+          "component": "CodeEditor",
+          "value": {
+            "path": "/f1/content"
+          },
+          "language": "python",
+          "label": "app.py"
+        },
+        {
+          "id": "f1_save_label",
+          "component": "Text",
+          "text": "Save"
+        },
+        {
+          "id": "f1_save",
+          "component": "Button",
+          "variant": "primary",
+          "child": "f1_save_label",
+          "action": {
+            "event": {
+              "name": "save",
+              "context": {
+                "target": "/home/ada/projects/app.py",
+                "base": "abababababababababababababababababababababababababababababababab",
+                "content": {
+                  "path": "/f1/content"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "f1_run_label",
+          "component": "Text",
+          "text": "Run"
+        },
+        {
+          "id": "f1_run",
+          "component": "Button",
+          "variant": "default",
+          "child": "f1_run_label",
+          "action": {
+            "event": {
+              "name": "run",
+              "context": {
+                "target": "/home/ada/projects/app.py"
+              }
+            }
+          }
+        },
+        {
+          "id": "f1_actions",
+          "component": "Row",
+          "children": [
+            "f1_save",
+            "f1_run"
+          ],
+          "align": "center"
+        },
+        {
+          "id": "f1_note",
+          "component": "Text",
+          "text": "Run runs the file as saved, in a sandbox without network access.",
+          "variant": "caption"
+        },
+        {
+          "id": "f1",
+          "component": "Column",
+          "children": [
+            "f1_head",
+            "f1_code",
+            "f1_actions",
+            "f1_note"
+          ]
+        },
+        {
+          "id": "f2_head",
+          "component": "Text",
+          "text": "Proposed change to /home/ada/projects/app.py",
+          "variant": "caption"
+        },
+        {
+          "id": "f2_diff",
+          "component": "Text",
+          "text": "```praxis-diff\n--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-print('hi')\n+print('bye')\n```",
+          "variant": "body"
+        },
+        {
+          "id": "f2_apply_label",
+          "component": "Text",
+          "text": "Apply"
+        },
+        {
+          "id": "f2_apply",
+          "component": "Button",
+          "variant": "primary",
+          "child": "f2_apply_label",
+          "action": {
+            "event": {
+              "name": "apply",
+              "context": {
+                "proposal": "c0ffee"
+              }
+            }
+          }
+        },
+        {
+          "id": "f2_discard_label",
+          "component": "Text",
+          "text": "Discard"
+        },
+        {
+          "id": "f2_discard",
+          "component": "Button",
+          "variant": "default",
+          "child": "f2_discard_label",
+          "action": {
+            "event": {
+              "name": "discard",
+              "context": {
+                "proposal": "c0ffee"
+              }
+            }
+          }
+        },
+        {
+          "id": "f2_actions",
+          "component": "Row",
+          "children": [
+            "f2_apply",
+            "f2_discard"
+          ],
+          "align": "center"
+        },
+        {
+          "id": "f2_note",
+          "component": "Text",
+          "text": "Nothing is changed until you apply it, and an applied change can be undone.",
+          "variant": "caption"
+        },
+        {
+          "id": "f2",
+          "component": "Column",
+          "children": [
+            "f2_head",
+            "f2_diff",
+            "f2_actions",
+            "f2_note"
+          ]
+        },
+        {
+          "id": "f3_head",
+          "component": "Text",
+          "text": "$ python3 app.py · exit code 1 · 0.2 s",
+          "variant": "caption"
+        },
+        {
+          "id": "f3_out_label",
+          "component": "Text",
+          "text": "Output",
+          "variant": "caption"
+        },
+        {
+          "id": "f3_out",
+          "component": "Text",
+          "text": "```\nhi\n```",
+          "variant": "body"
+        },
+        {
+          "id": "f3_err_label",
+          "component": "Text",
+          "text": "Errors",
+          "variant": "caption"
+        },
+        {
+          "id": "f3_err",
+          "component": "Text",
+          "text": "```\nTraceback: boom\n```",
+          "variant": "body"
+        },
+        {
+          "id": "f3_again_label",
+          "component": "Text",
+          "text": "Run again"
+        },
+        {
+          "id": "f3_again",
+          "component": "Button",
+          "variant": "default",
+          "child": "f3_again_label",
+          "action": {
+            "event": {
+              "name": "run",
+              "context": {
+                "target": "/home/ada/projects/app.py"
+              }
+            }
+          }
+        },
+        {
+          "id": "f3_edit_label",
+          "component": "Text",
+          "text": "Edit"
+        },
+        {
+          "id": "f3_edit",
+          "component": "Button",
+          "variant": "default",
+          "child": "f3_edit_label",
+          "action": {
+            "event": {
+              "name": "edit",
+              "context": {
+                "target": "/home/ada/projects/app.py"
+              }
+            }
+          }
+        },
+        {
+          "id": "f3_actions",
+          "component": "Row",
+          "children": [
+            "f3_again",
+            "f3_edit"
+          ],
+          "align": "center"
+        },
+        {
+          "id": "f3",
+          "component": "Column",
+          "children": [
+            "f3_head",
+            "f3_out_label",
+            "f3_out",
+            "f3_err_label",
+            "f3_err",
+            "f3_actions"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "version": "v0.9",
+    "updateDataModel": {
+      "surfaceId": "workspace",
+      "path": "/",
+      "value": {
+        "f1": {
+          "content": "print('hi')\n"
+        }
+      }
+    }
+  }
+]

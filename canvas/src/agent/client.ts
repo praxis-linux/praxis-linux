@@ -1,7 +1,37 @@
 import { A2uiMessageSchema, type ActionPayload } from "@a2ui/web_core/v0_9";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { z } from "zod";
 
 const AGENT_URL = import.meta.env.VITE_PRAXIS_AGENT_URL ?? "http://127.0.0.1:7729";
+
+let token: Promise<string | null> | undefined;
+
+/**
+ * The secret the agent was started with, if any: the desktop shell's, when it
+ * started the agent itself, or in development VITE_PRAXIS_AGENT_TOKEN. Asked once.
+ */
+function agentToken(): Promise<string | null> {
+  token ??= (isTauri() ? invoke<string | null>("agent_token").catch(() => null) : Promise.resolve(null)).then(
+    (fromShell) => fromShell ?? import.meta.env.VITE_PRAXIS_AGENT_TOKEN ?? null,
+  );
+  return token;
+}
+
+async function headers(sessionId: string): Promise<Record<string, string>> {
+  const secret = await agentToken();
+  return {
+    "Content-Type": "application/json",
+    "X-Praxis-Session": sessionId,
+    ...(secret ? { "X-Praxis-Token": secret } : {}),
+  };
+}
+
+function refused(response: Response): AgentError {
+  if (response.status === 401) {
+    return new AgentError("The agent did not recognise this Canvas. Restart Praxis.");
+  }
+  return new AgentError(`The agent answered with HTTP ${response.status}.`);
+}
 
 export const MODES = ["conversation", "file", "code"] as const;
 export type Mode = (typeof MODES)[number];
@@ -29,6 +59,8 @@ export interface AgentClient {
   stop(sessionId: string): Promise<void>;
   /** Delete a conversation and what was read during it. */
   forget(sessionId: string): Promise<void>;
+  /** Resolves once the agent answers, or after a while if it does not. */
+  ready(): Promise<void>;
 }
 
 export const httpAgent: AgentClient = {
@@ -36,6 +68,7 @@ export const httpAgent: AgentClient = {
   resume: (sessionId, signal) => post("/resume", {}, sessionId, signal),
   stop: (sessionId) => command("/stop", sessionId),
   forget: (sessionId) => command("/forget", sessionId),
+  ready: () => (isTauri() ? agentUp() : Promise.resolve()),
   action: (sessionId, action, signal) => {
     const { name, surfaceId, sourceComponentId, timestamp, context } = action;
     const message = {
@@ -46,6 +79,23 @@ export const httpAgent: AgentClient = {
   },
 };
 
+// How long the desktop app waits for the agent it started, which waits for the model
+// proxy, which loads slowly the first time.
+const STARTUP_MS = 120_000;
+
+/** In the desktop app the agent starts with the window, and takes a few seconds. */
+async function agentUp(): Promise<void> {
+  const deadline = Date.now() + STARTUP_MS;
+  while (Date.now() < deadline) {
+    try {
+      if ((await fetch(AGENT_URL + "/health")).ok) return;
+    } catch {
+      // Not listening yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+
 /** Why a request to the agent failed, in words fit to show the user. */
 export class AgentError extends Error {}
 
@@ -55,13 +105,13 @@ async function command(path: string, sessionId: string): Promise<void> {
   try {
     response = await fetch(AGENT_URL + path, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Praxis-Session": sessionId },
+      headers: await headers(sessionId),
       body: "{}",
     });
   } catch {
     throw new AgentError("Could not reach the agent. Is it running?");
   }
-  if (!response.ok) throw new AgentError(`The agent answered with HTTP ${response.status}.`);
+  if (!response.ok) throw refused(response);
 }
 
 const EVENT_TYPES = new Set<string>(
@@ -78,7 +128,7 @@ async function* post(
   try {
     response = await fetch(AGENT_URL + path, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Praxis-Session": sessionId },
+      headers: await headers(sessionId),
       body: JSON.stringify(body),
       signal,
     });
@@ -86,9 +136,7 @@ async function* post(
     if (signal.aborted) throw error;
     throw new AgentError("Could not reach the agent. Is it running?");
   }
-  if (!response.ok || !response.body) {
-    throw new AgentError(`The agent answered with HTTP ${response.status}.`);
-  }
+  if (!response.ok || !response.body) throw refused(response);
 
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
   try {

@@ -1,5 +1,6 @@
 import { BASIC_FUNCTIONS, BasicCatalogThemeSchema, ButtonApi, Catalog } from "@a2ui/web_core/v0_9";
 import { z } from "zod";
+import { CodeEditor } from "./CodeEditor";
 import {
   Card,
   CheckBox,
@@ -55,7 +56,8 @@ const FileImage = createComponentImplementation(FileImageApi, ({ props }) => (
  * Everything the agent may put on the Canvas. A subset of the A2UI basic
  * catalog: components that load remote URLs (Image, Video, AudioPlayer, Icon)
  * and the `openUrl` function are left out, so a surface cannot make network
- * requests or navigate away. FileImage shows images from inline data only.
+ * requests or navigate away. FileImage shows images from inline data only, and
+ * CodeEditor edits text the agent sent, bound to the data model.
  */
 export const praxisCatalog = new Catalog<ReactComponentImplementation>(
   PRAXIS_CATALOG_ID,
@@ -76,6 +78,7 @@ export const praxisCatalog = new Catalog<ReactComponentImplementation>(
     Slider,
     DateTimeInput,
     FileImage,
+    CodeEditor,
   ],
   BASIC_FUNCTIONS.filter((fn) => fn.name !== "openUrl"),
   BasicCatalogThemeSchema,

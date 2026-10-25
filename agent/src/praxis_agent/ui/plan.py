@@ -4,12 +4,13 @@ The model never writes A2UI directly. It fills in this small nested schema, and
 `a2ui.build_messages` compiles it into protocol messages. See ADR-003.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
 from ..tools.files import FileText, ImageFile, Listing
+from ..tools.run import RunResult
 
 Mode = Literal["conversation", "file", "code"]
 
@@ -74,6 +75,57 @@ class UIPlan(BaseModel):
     blocks: list[Block] = Field(min_length=1)
 
 
+# --- Blocks the agent makes; the model never fills these in. ---
+
+
+class Editor(BaseModel):
+    """A file open for editing."""
+
+    path: str
+    content: str
+    # The file's hash as read, which saving checks it still has.
+    sha256: str
+
+
+class Proposal(BaseModel):
+    """A change the model proposed, waiting for the user to apply or discard it."""
+
+    id: str
+    path: str
+    # A unified diff from the file as it is to the file as proposed.
+    diff: str
+    created: bool
+
+
+class Changed(BaseModel):
+    """A write that just happened, which can be undone."""
+
+    path: str
+    created: bool
+    backup: str
+
+
+class Ran(BaseModel):
+    """What running a file printed."""
+
+    result: RunResult
+
+
+Shown = (
+    TextBlock
+    | CodeBlock
+    | CardsBlock
+    | FormBlock
+    | Listing
+    | FileText
+    | ImageFile
+    | Editor
+    | Proposal
+    | Changed
+    | Ran
+)
+
+
 @dataclass
 class Screen:
     """What the Canvas is asked to show: the model's blocks plus what the agent looked up.
@@ -84,6 +136,8 @@ class Screen:
 
     mode: Mode
     title: str
-    blocks: list[TextBlock | CodeBlock | CardsBlock | FormBlock | Listing | FileText | ImageFile]
+    blocks: list[Shown]
     # The folder above the one this screen lists, when the user can go there.
     up: str | None = None
+    # Suffixes of the files that may be offered a Run button, such as ".py".
+    can_run: list[str] = field(default_factory=list)
