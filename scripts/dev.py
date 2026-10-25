@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import platform
+import secrets
 import shlex
 import shutil
 import signal
@@ -68,6 +69,9 @@ def main() -> int:
         )
         return 1
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYDANTIC_AI_NO_BANNER="1")
+    # A new secret each start, known to the agent and the Canvas only: other programs
+    # on this machine can reach the agent's port, but not act through it.
+    env["PRAXIS_AGENT_TOKEN"] = env["VITE_PRAXIS_AGENT_TOKEN"] = secrets.token_urlsafe(32)
     ollama = find_ollama()
     if ollama:
         env["OLLAMA_API_BASE"] = ollama

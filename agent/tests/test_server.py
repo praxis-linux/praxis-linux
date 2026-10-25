@@ -16,7 +16,7 @@ from pydantic_ai.models.function import FunctionModel
 from praxis_agent import planner
 from praxis_agent.audit import AuditLog
 from praxis_agent.memory import Conversations
-from praxis_agent.server import _Workspace, create_app
+from praxis_agent.server import _Workspace, create_app, unified_diff
 from praxis_agent.tools.files import FileTools
 from praxis_agent.tools.run import RunnerStatus, RunResult, RunTools
 from praxis_agent.ui.plan import Screen, TextBlock
@@ -1402,3 +1402,157 @@ def test_a_proposal_keeps_the_files_final_line_break(client, model, home):
     act(client, apply["name"], apply["context"])
 
     assert (home / "app.py").read_bytes() == b"print('bye')\n"
+
+
+# --- The token shared with the Canvas that started the agent ----------------
+
+
+@pytest.fixture
+def guarded(audit, memory, model, home, runner, tmp_path):
+    @asynccontextmanager
+    async def files():
+        async with Client(build_server(Files([home], backups=tmp_path / "backups"))) as mcp:
+            yield await FileTools.connect(mcp)
+
+    @asynccontextmanager
+    async def run():
+        yield runner
+
+    app = create_app(
+        audit=audit,
+        conversations=memory,
+        model_for=model.for_alias,
+        connect_files=files,
+        connect_runner=run,
+        token="s3cret-token",
+    )
+    with TestClient(app, base_url=AGENT_URL) as test_client:
+        yield test_client
+
+
+def test_with_a_token_a_request_without_it_is_refused(guarded, model, audit, home):
+    asked = ask(guarded, "hello")
+    saved = guarded.post(
+        "/action",
+        json=action("save", {"target": str(home / "app.py"), "base": "0" * 64, "content": "x"}),
+        headers=SESSION,
+    )
+    wrong = ask(guarded, "hello", session={**SESSION, "X-Praxis-Token": "guess"})
+
+    assert [asked.status_code, saved.status_code, wrong.status_code] == [401, 401, 401]
+    assert model.requests == []
+    assert rows(audit, "tool_calls") == []
+    assert (home / "app.py").read_bytes() == b"print('hi')\n"
+
+
+def test_with_the_token_the_agent_answers(guarded):
+    response = ask(guarded, "hello", session={**SESSION, "X-Praxis-Token": "s3cret-token"})
+
+    assert response.status_code == 200
+    assert modes(response) == ["conversation"]
+
+
+def test_health_and_cors_preflight_need_no_token(guarded):
+    preflight = guarded.options(
+        "/intent",
+        headers={
+            "Origin": "tauri://localhost",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,x-praxis-session,x-praxis-token",
+        },
+    )
+
+    assert guarded.get("/health").status_code == 200
+    assert preflight.status_code == 200
+    assert "x-praxis-token" in preflight.headers["access-control-allow-headers"].lower()
+
+
+# --- What a diff must not hide ------------------------------------------------
+
+
+def test_a_change_hidden_in_another_kind_of_line_break_shows_in_the_diff():
+    # Python reads this as one line: the check becomes part of the comment.
+    diff, invisible = unified_diff("# verify\ncheck()\n", "# verify\x1ccheck()\n", "x.py")
+
+    assert "+# verify⟨U+001C⟩check()" in diff
+    assert invisible == 1
+
+
+def test_bidirectional_and_zero_width_characters_are_written_out():
+    diff, invisible = unified_diff("ok = 1\n", "ok = 1 \u202e# \u200b\n", "x.py")
+
+    assert "+ok = 1 ⟨U+202E⟩# ⟨U+200B⟩" in diff
+    assert invisible == 2
+
+
+def test_trailing_whitespace_is_visible_on_changed_lines():
+    diff, _ = unified_diff("x = 1\n", "x = 1 \t\n", "x.py")
+
+    assert "+x = 1·→" in diff.split("\n")
+
+
+def test_crlf_files_are_compared_line_by_line_not_as_one_change():
+    diff, _ = unified_diff("a\r\nb\r\n", "a\nc\n", "x.py")
+
+    assert "-b" in diff.split("\n") and "+c" in diff.split("\n")
+    assert " a" in diff.split("\n")
+
+
+def test_a_proposal_with_invisible_characters_carries_a_warning(client, model, home):
+    model.script = [propose("app.py", "print('hi')\x0bprint('more')\n")]
+
+    components = workspace(ask(client, "change it"))
+
+    warnings = [c["text"] for c in components.values() if c.get("text", "").startswith("Careful")]
+    assert warnings == [
+        "Careful: the new text holds 1 invisible or control character, shown as ⟨U+…⟩. "
+        "They can change what code does without showing in an editor."
+    ]
+
+
+def test_the_audit_log_says_which_file_an_undo_put_back(client, audit, home):
+    saved = act(
+        client, "save", save_context(act(client, "edit", {"target": str(home / "app.py")}), "x\n")
+    )
+    undo = surfaces(saved)["workspace"]["components"]["f0_undo"]["action"]["event"]
+
+    act(client, undo["name"], undo["context"])
+
+    (call,) = [r for r in rows(audit, "tool_calls") if r["tool"] == "undo_write"]
+    assert json.loads(call["arguments"])["path"] == str(home / "app.py")
+
+
+def test_a_refusal_during_a_proposal_turn_is_still_shown(client, model, home):
+    model.script = [
+        {"step": {"do": "read_text_file", "path": ".env"}},
+        propose("app.py", "print('bye')\n"),
+    ]
+
+    components = workspace(ask(client, "use my .env to change app.py"))
+
+    notes = [c["text"] for c in components.values() if c.get("text", "").startswith("Not read")]
+    assert len(notes) == 1 and "hidden" in notes[0]
+    assert "f0_apply" in components
+
+
+def test_the_kill_switch_stops_a_file_action_too(client, runner, home):
+    started = threading.Event()
+
+    async def slow_run(request):
+        started.set()
+        await asyncio.sleep(30)
+
+    runner.run = slow_run
+    result = {}
+
+    def run_it():
+        result["response"] = act(client, "run", {"target": str(home / "app.py")})
+
+    worker = threading.Thread(target=run_it)
+    worker.start()
+    assert started.wait(5)
+    stopped = client.post("/stop", headers=SESSION).json()
+    worker.join(10)
+
+    assert stopped == {"stopped": 1}
+    assert not worker.is_alive()

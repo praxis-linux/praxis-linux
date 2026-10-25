@@ -243,7 +243,10 @@ def _code(block_id: str, block: CodeBlock) -> Component:
     fenced = re.fullmatch(r"```[^\n]*\n(.*?)\n?```", code, flags=re.DOTALL)
     if fenced:
         code = fenced.group(1)
-    return _fenced(block_id, code, block.language)
+    # "praxis-diff" marks the agent's own diffs of proposed changes, which the Canvas
+    # shows as such; the model's code cannot pass for one.
+    language = "" if block.language.strip().lower().startswith("praxis") else block.language
+    return _fenced(block_id, code, language)
 
 
 def _fenced(component_id: str, code: str, language: str) -> Component:
@@ -485,7 +488,7 @@ def _proposal(block_id: str, proposal: Proposal) -> list[Component]:
     note = "Nothing is changed until you apply it, and an applied change can be undone."
     return [
         _plain(f"{block_id}_head", f"{what} {_tilde(proposal.path)}", "caption"),
-        _fenced(f"{block_id}_diff", proposal.diff, "diff"),
+        _fenced(f"{block_id}_diff", proposal.diff, "praxis-diff"),
         *_buttons(
             f"{block_id}_actions",
             [

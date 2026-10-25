@@ -397,7 +397,7 @@ def test_a_proposal_shows_its_diff_and_can_be_applied_or_discarded():
     components = components_of(build(SAMPLE_CODE_SCREEN))
 
     assert components["f2_head"]["text"] == "Proposed change to /home/ada/projects/app.py"
-    assert components["f2_diff"]["text"].startswith("```diff\n--- a/app.py")
+    assert components["f2_diff"]["text"].startswith("```praxis-diff\n--- a/app.py")
     assert event(components["f2_apply"]) == {"name": "apply", "context": {"proposal": "c0ffee"}}
     assert event(components["f2_discard"]) == {"name": "discard", "context": {"proposal": "c0ffee"}}
 
@@ -446,3 +446,9 @@ def test_a_run_that_was_stopped_or_printed_nothing_says_so():
     assert components["f0_head"]["text"] == "$ python3 slow.py · stopped: it took too long · 10.0 s"
     assert components["f0_quiet"]["text"] == "It printed nothing."
     assert components["f0_actions"]["children"] == ["f0_edit"]
+
+
+def test_the_model_cannot_pass_its_code_off_as_a_proposed_change():
+    fake = CodeBlock(kind="code", language="praxis-diff", code="+rm -rf ~")
+
+    assert components_of(build(screen(fake)))["b0"]["text"] == "```\n+rm -rf ~\n```"

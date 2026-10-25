@@ -195,9 +195,14 @@ class UndoWrite(BaseModel):
     failed: ClassVar[str] = "nothing was changed"
 
     backup: str
+    # The file the write changed, when the agent knows it: recorded in the audit log.
+    path: str | None = None
 
     def call(self) -> tuple[str, dict[str, Any]]:
         return "undo_write", {"backup": self.backup}
+
+    def audited(self) -> dict[str, Any]:
+        return {"backup": self.backup, "path": self.path}
 
 
 FileRequest = Lookup | OpenForEditing | WriteFile | UndoWrite

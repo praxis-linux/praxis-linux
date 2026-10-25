@@ -167,7 +167,7 @@
         {
           "id": "f2_diff",
           "component": "Text",
-          "text": "```diff\n--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-print('hi')\n+print('bye')\n```",
+          "text": "```praxis-diff\n--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-print('hi')\n+print('bye')\n```",
           "variant": "body"
         },
         {

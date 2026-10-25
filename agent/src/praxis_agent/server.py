@@ -11,8 +11,11 @@ Every endpoint but /health answers with newline-delimited JSON, one event per li
 
 import asyncio
 import difflib
+import hmac
 import json
 import logging
+import os
+import re
 import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -177,11 +180,39 @@ class PendingChange:
     content: str
 
 
-def unified_diff(old: str, new: str, name: str) -> str:
+# Characters that change what text means without showing: controls, line and paragraph
+# separators other than "\n", zero-width and bidirectional marks (Trojan Source).
+_INVISIBLE = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f­؜᠎​-‏ -‮⁠-⁯﻿￹-￻]")
+_TRAILING = re.compile(r"[ \t]+$")
+
+
+def unified_diff(old: str, new: str, name: str) -> tuple[str, int]:
+    """The change from `old` to `new` as the user is shown it, and how many invisible
+    characters the new lines hold.
+
+    Lines are split at "\\n" only, as interpreters split them, so a change hidden in
+    another kind of line break shows. Invisible characters are written out as
+    ⟨U+XXXX⟩, and trailing spaces and tabs as · and →.
+    """
     lines = difflib.unified_diff(
-        old.splitlines(), new.splitlines(), fromfile=f"a/{name}", tofile=f"b/{name}", lineterm=""
+        old.replace("\r\n", "\n").split("\n"),
+        new.replace("\r\n", "\n").split("\n"),
+        fromfile=f"a/{name}",
+        tofile=f"b/{name}",
+        lineterm="",
     )
-    return "\n".join(lines)
+    shown: list[str] = []
+    invisible = 0
+    for i, line in enumerate(lines):
+        if i < 2 or line.startswith("@@"):
+            shown.append(line)
+            continue
+        text, count = _INVISIBLE.subn(lambda m: f"⟨U+{ord(m.group()):04X}⟩", line[1:])
+        text = _TRAILING.sub(lambda m: m.group().replace(" ", "·").replace("\t", "→"), text)
+        if line[0] == "+":
+            invisible += count
+        shown.append(line[0] + text)
+    return "\n".join(shown), invisible
 
 
 def turn_to_revisit(action: Action) -> int:
@@ -235,13 +266,23 @@ def create_app(
     model_for: Callable[[str], Model] = planner.litellm_model,
     connect_files: Callable[[], AbstractAsyncContextManager[FileTools]] = praxis_fs,
     connect_runner: Callable[[], AbstractAsyncContextManager[RunTools]] = praxis_run,
+    token: str | None = None,
 ) -> FastAPI:
+    """The agent's HTTP app.
+
+    `token`, or else PRAXIS_AGENT_TOKEN, is the secret the Canvas that started the
+    agent was given; when there is one, every request but /health must carry it.
+    """
+    secret = token if token is not None else os.environ.get("PRAXIS_AGENT_TOKEN") or None
     audit_log = audit or AuditLog()
     memory = conversations or Conversations()
     tools: dict[str, FileTools] = {}
     runners: dict[str, RunTools] = {}
     # Changes the model proposed, per conversation, by id.
     proposals: dict[str, dict[str, PendingChange]] = {}
+    # Which file each write this agent made changed, by backup id: so the audit log can
+    # say which file an undo puts back, before praxis-fs forgets the backup.
+    written_paths: dict[str, str] = {}
     # What each session's user is looking at: the file or folder on screen, if any.
     viewing: dict[str, str | None] = {}
     # Turns being worked on right now, so the kill switch can stop every one of them.
@@ -266,7 +307,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=ALLOWED_ORIGINS,
         allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type", "X-Praxis-Session"],
+        allow_headers=["Content-Type", "X-Praxis-Session", "X-Praxis-Token"],
     )
 
     # Added last, so it runs first. CORS alone does not stop a web page that has
@@ -283,6 +324,15 @@ def create_app(
         origin = request.headers.get("origin")
         if origin is not None and origin not in ALLOWED_ORIGINS:
             return PlainTextResponse("This agent only answers the Praxis Canvas.", status_code=403)
+        # Any program on this machine, run by any user, can reach 127.0.0.1. With a
+        # token, only the Canvas that started the agent knows it. A CORS preflight
+        # carries no custom headers, and is answered without it.
+        if secret and request.method != "OPTIONS" and request.url.path != "/health":
+            given = request.headers.get("x-praxis-token", "")
+            if not hmac.compare_digest(given.encode(), secret.encode()):
+                return PlainTextResponse(
+                    "This agent only answers the Canvas that started it.", status_code=401
+                )
         return await call_next(request)
 
     # Required on every turn. A custom header also makes the request non-simple,
@@ -304,7 +354,7 @@ def create_app(
         # What a failure leaves undone, in the words the user is given.
         failed = getattr(request, "failed", "nothing was read")
         service = "code runner" if isinstance(request, RunFile) else "file service"
-        audited = request.audited() if isinstance(request, WriteFile) else arguments
+        audited = request.audited() if isinstance(request, WriteFile | UndoWrite) else arguments
         try:
             call_id = audit_log.begin_tool(
                 session_id=session_id, tool=tool, arguments=audited, asked_by=asked_by
@@ -332,16 +382,20 @@ def create_app(
         audit_log.finish_tool(call_id)
         return result
 
-    async def turn(session_id: str, prompt: str, label: str, purpose: str) -> AsyncIterator[str]:
-        """A model turn, which the kill switch (POST /stop) can end at any point."""
+    async def stoppable(lines: AsyncIterator[str]) -> AsyncIterator[str]:
+        """`lines`, which the kill switch (POST /stop) can end at any point."""
         task = asyncio.current_task()
         if task is not None:
             running.add(task)
         try:
-            async for line in model_turn(session_id, prompt, label, purpose):
+            async for line in lines:
                 yield line
         finally:
             running.discard(task)  # type: ignore[arg-type]
+
+    def turn(session_id: str, prompt: str, label: str, purpose: str) -> AsyncIterator[str]:
+        """A model turn, which the kill switch can end at any point."""
+        return stoppable(model_turn(session_id, prompt, label, purpose))
 
     async def model_turn(
         session_id: str, prompt: str, label: str, purpose: str
@@ -435,8 +489,17 @@ def create_app(
         proposal = turn.proposal
         assert proposal is not None
         blocks: list[Any] = list(turn.reply.blocks)
+        blocks += [
+            TextBlock(kind="text", style="caption", text=f"Not read: {reason}")
+            for reason in dict.fromkeys(turn.refused)
+        ]
         screen = Screen(mode="code", title=turn.reply.title, blocks=blocks)
-        where = proposal.path
+        # Where the file is, as praxis-fs reads the path: "~" is the home folder, and a
+        # relative path starts in the main folder.
+        target = Path(proposal.path).expanduser()
+        if not target.is_absolute():
+            target = Path(main_folder(), target)
+        where = relative(str(target), main_folder())
 
         def not_changed(reason: str) -> Screen:
             blocks.append(TextBlock(kind="text", style="caption", text=f"Not changed: {reason}"))
@@ -475,16 +538,17 @@ def create_app(
         if isinstance(current, FileText):
             path, base = current.path, current.sha256
         else:
-            path, base = str(Path(main_folder(), proposal.path).expanduser()), None
+            path, base = str(target), None
         pending[change_id] = PendingChange(path=path, base=base, content=new)
-        blocks.append(
-            Proposal(
-                id=change_id,
-                path=path,
-                diff=unified_diff(old, new, where),
-                created=current is None,
+        diff, invisible = unified_diff(old, new, where)
+        blocks.append(Proposal(id=change_id, path=path, diff=diff, created=current is None))
+        if invisible:
+            warning = (
+                f"Careful: the new text holds {invisible} invisible or control "
+                f"character{'s' if invisible > 1 else ''}, shown as ⟨U+…⟩. They can change "
+                "what code does without showing in an editor."
             )
-        )
+            blocks.append(TextBlock(kind="text", style="caption", text=warning))
         if current is None:
             screen.title = f"New file {Path(path).name}"
         return screen
@@ -547,6 +611,7 @@ def create_app(
                 )
                 assert isinstance(written, Written)
                 changed = Changed(path=written.path, created=written.created, backup=written.backup)
+                written_paths[written.backup] = written.path
                 screen = editing(changed, written.path, content, written.sha256)
             elif name == "run":
                 target = args["target"]
@@ -573,6 +638,7 @@ def create_app(
                 written = await use(session_id, request, "user")
                 assert isinstance(written, Written)
                 changed = Changed(path=written.path, created=written.created, backup=written.backup)
+                written_paths[written.backup] = written.path
                 screen = editing(changed, written.path, change.content, written.sha256)
             elif name == "discard":
                 proposals.get(session_id, {}).pop(args["proposal"], None)
@@ -581,7 +647,9 @@ def create_app(
                 )
                 screen = Screen(mode="code", title="Discarded", blocks=[note])
             else:
-                undone = await use(session_id, UndoWrite(backup=args["backup"]), "user")
+                backup = args["backup"]
+                request = UndoWrite(backup=backup, path=written_paths.get(backup))
+                undone = await use(session_id, request, "user")
                 assert isinstance(undone, Undone)
                 where = relative(undone.path, main_folder())
                 if undone.removed:
@@ -650,7 +718,7 @@ def create_app(
             return stream(show_turn(session_id, turn_to_revisit(body.action)))
         if body.action.name in FILE_ACTIONS:
             args = file_action_args(body.action)
-            return stream(on_file(session_id, body.action.name, args))
+            return stream(stoppable(on_file(session_id, body.action.name, args)))
         prompt, label = prompt_for_action(body.action)
         return stream(turn(session_id, prompt, label, f"action:{body.action.name}"))
 
