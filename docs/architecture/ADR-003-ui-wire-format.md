@@ -28,6 +28,7 @@ Catalog id: `praxis-linux:catalog:phase0`.
 | Included | Left out | Why |
 |---|---|---|
 | Text, Row, Column, List, Card, Tabs, Divider, Modal, Button, TextField, CheckBox, ChoicePicker, Slider, DateTimeInput | Image, Video, AudioPlayer, Icon | They load remote URLs, which would let a surface make network requests |
+| FileImage (Praxis's own) | | Shows an image file from an inline `data:image/…;base64,…` address only (PNG, JPEG, GIF or WebP); anything else is refused by its schema, so it cannot fetch |
 | All basic functions except one | `openUrl` | A surface must not be able to navigate away |
 
 `Button` is our own implementation of the basic catalog's Button API so the Canvas can style each variant. Praxis-specific components (`FileTree`, `CodeEditor`, …) join this catalog as File and Code mode land.
