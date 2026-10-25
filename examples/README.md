@@ -4,13 +4,13 @@ End-to-end demo flows for Praxis.
 
 ## Status
 
-[`90s-demo`](90s-demo/README.md), the launch demo, is ready: a setup script and a shot list. The others are not written yet, though everything they show works.
+[`90s-demo`](90s-demo/README.md), the launch demo, is ready: a setup script and a shot list, and [the recording](https://youtu.be/MgkO89fFu8c). The others are not written yet, though everything they show works.
 
 ## Demos
 
 | Demo | Description | Status |
 |---|---|---|
-| [`90s-demo`](90s-demo/README.md) | The launch demo: intent → mode switch → useful action | Ready |
+| [`90s-demo`](90s-demo/README.md) | The launch demo: intent → mode switch → useful action | Ready; [recorded](https://youtu.be/MgkO89fFu8c) |
 | `conversation-basic` | Chat, streaming response, memory across turns | Not written yet |
 | `file-search` | "Find all Python files I edited this week" | Not written yet |
 | `code-edit-run` | Open, edit, and run a script from intent | Not written yet (the 90-second demo covers it) |

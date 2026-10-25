@@ -6,7 +6,7 @@ We are building an AI-native operating system that rejects the chat sidebar. The
 
 The name is from the Greek *praxis* (πρᾶξις) — *action; the moment thought becomes deed*.
 
-**📜 [Manifesto](https://github.com/praxis-linux/praxis-linux/blob/main/MANIFESTO.md)** · **🗺️ [Roadmap](https://github.com/praxis-linux/praxis-linux/blob/main/docs/ROADMAP.md)** · **⭐ Star to follow along**
+**📜 [Manifesto](https://github.com/praxis-linux/praxis-linux/blob/main/MANIFESTO.md)** · **🗺️ [Roadmap](https://github.com/praxis-linux/praxis-linux/blob/main/docs/ROADMAP.md)** · **▶ [90-second demo](https://youtu.be/MgkO89fFu8c)** · **⭐ Star to follow along**
 
 ## Status
 

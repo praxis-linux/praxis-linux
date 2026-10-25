@@ -9,15 +9,15 @@ Praxis rejects the idea that AI should be a sidebar. The Canvas is one surface t
 
 The name is from the Greek *praxis* (πρᾶξις) — *action; the moment thought becomes deed*.
 
-**👉 Start here: [The Manifesto](MANIFESTO.md)**
+**👉 Start here: [The Manifesto](MANIFESTO.md)** · **▶ [See it in 90 seconds](https://youtu.be/MgkO89fFu8c)**
 
 ---
 
 ## Status
 
-**Phase 0 · Spike — 11 of 13 milestones done.** The Canvas runs as an app on an existing Linux, packaged as an AppImage. Once the idea is proven, Phase 1 wraps it into a bootable ISO. See the [Roadmap](docs/ROADMAP.md) for the full plan.
+**Phase 0 · Spike — 12 of 13 milestones done.** The Canvas runs as an app on an existing Linux, packaged as an AppImage. Once the idea is proven, Phase 1 wraps it into a bootable ISO. See the [Roadmap](docs/ROADMAP.md) for the full plan.
 
-What works today, on a local model:
+What works today, on a local model ([90-second demo](https://youtu.be/MgkO89fFu8c)):
 
 - **Conversation, File and Code modes on one surface.** Ask "what did I work on this week?" and the Canvas lists those files; open one, ask for a summary, edit it, run it.
 - **The agent proposes; you decide.** A change to a file is a diff until you press Apply, and every change can be undone.

@@ -2,6 +2,8 @@
 
 The Phase 0 exit demo: intent, the Canvas changing mode, and a useful action. It runs on the packaged app, against a folder made for it, so it can be recorded again the same way.
 
+**The recording: [https://youtu.be/MgkO89fFu8c](https://youtu.be/MgkO89fFu8c)** (unlisted on YouTube).
+
 ## What it shows
 
 1. You type what you want; the Canvas becomes what that needs. Conversation, File mode and Code mode, one surface.

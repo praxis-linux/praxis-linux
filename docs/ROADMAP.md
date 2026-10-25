@@ -33,9 +33,9 @@ This document is the single source of truth for project progress. Every status u
 - [x] **M0.10** — File mode functional (browse, preview, search via intent) — previews for text and images (PNG, JPEG, GIF, WebP); PDF previews not yet
 - [x] **M0.11** — Code mode functional (open, edit, run a file with CodeMirror) — the model proposes changes as diffs the user applies; every write can be undone; files run in a bubblewrap sandbox (`praxis-run`, Linux only)
 - [x] **M0.12** — Privacy guardrails: audit log, cloud-call toast, kill switch hotkey (Esc, in the Canvas window; a system-wide hotkey comes with the Phase 1 session), deleting a conversation
-- [ ] **M0.13** — 90-second demo video published; pre-launch post drafted — demo script and setup in [`examples/90s-demo`](../examples/90s-demo/README.md), post drafted in [`docs/launch`](launch/pre-launch-post.md); the video is recorded, not yet published
+- [x] **M0.13** — 90-second demo video published; pre-launch post drafted — [the video](https://youtu.be/MgkO89fFu8c) (unlisted on YouTube, linked from the README); demo script and setup in [`examples/90s-demo`](../examples/90s-demo/README.md); post drafted in [`docs/launch`](launch/pre-launch-post.md)
 
-**Phase 0 progress: 11 / 13 milestones complete (~85%).** Exit criteria: the AppImage runs on Ubuntu 24.04 and Arch Linux ✅; the 90-second video is recorded, not yet published.
+**Phase 0 progress: 12 / 13 milestones complete (~92%).** Exit criteria met: the 90-second video ✅, and the AppImage runs on Ubuntu 24.04 and Arch Linux ✅. Left: M0.3, the X handle and the domain.
 
 ---
 
