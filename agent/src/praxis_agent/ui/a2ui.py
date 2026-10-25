@@ -10,8 +10,19 @@ from datetime import tzinfo
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..tools.files import Entry, FileText, ImageFile, Listing, human_size
-from .plan import CardsBlock, CodeBlock, FormBlock, Screen, TextBlock
+from ..tools.files import MAX_EDIT_BYTES, Entry, FileText, ImageFile, Listing, human_size
+from ..tools.run import RunResult
+from .plan import (
+    CardsBlock,
+    Changed,
+    CodeBlock,
+    Editor,
+    FormBlock,
+    Proposal,
+    Ran,
+    Screen,
+    TextBlock,
+)
 
 if TYPE_CHECKING:
     # memory imports ui.plan, so importing it here at runtime would be circular.
@@ -31,6 +42,26 @@ MAX_FIELDS = 8
 TRAIL_LABEL_CHARS = 80
 
 _TEXT_VARIANT = {"heading": "h3", "body": "body", "caption": "caption"}
+
+# Blocks the agent makes rather than the model: what was looked up, opened or run.
+_AGENT_MADE = (Listing, FileText, ImageFile, Editor, Proposal, Changed, Ran)
+
+# The editor's language, by file suffix. The Canvas shows anything else as plain text.
+_LANGUAGES = {
+    ".py": "python",
+    ".js": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".jsx": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".json": "json",
+    ".md": "markdown",
+    ".html": "html",
+    ".css": "css",
+    ".rs": "rust",
+    ".sh": "shell",
+}
 
 Message = dict[str, Any]
 Component = dict[str, Any]
@@ -101,7 +132,7 @@ def update(
 def compile_screen(
     screen: Screen, *, timezone: tzinfo | None = None
 ) -> tuple[list[Component], dict[str, Any]]:
-    """The components that draw `screen`, and the data model its forms bind to.
+    """The components that draw `screen`, and the data model its forms and editors bind to.
 
     The model's blocks get ids `b0`, `b1`, ... and what was looked up gets `f0`,
     `f1`, ...: a listing keeps its id while the reply around it is still being
@@ -117,7 +148,7 @@ def compile_screen(
 
     replies = found = 0
     for block in screen.blocks[:MAX_BLOCKS]:
-        if isinstance(block, Listing | FileText | ImageFile):
+        if isinstance(block, _AGENT_MADE):
             block_id, found = f"f{found}", found + 1
         else:
             block_id, replies = f"b{replies}", replies + 1
@@ -135,9 +166,21 @@ def compile_screen(
         elif isinstance(block, Listing):
             components.extend(_listing(block_id, block, timezone))
         elif isinstance(block, FileText):
-            components.extend(_file(block_id, block))
+            components.extend(_file(block_id, block, _runnable(block.path, screen.can_run)))
         elif isinstance(block, ImageFile):
             components.extend(_image(block_id, block))
+        elif isinstance(block, Editor):
+            editor, initial = _editor(block_id, block, _runnable(block.path, screen.can_run))
+            components.extend(editor)
+            data[block_id] = initial
+        elif isinstance(block, Proposal):
+            components.extend(_proposal(block_id, block))
+        elif isinstance(block, Changed):
+            components.extend(_changed(block_id, block))
+        elif isinstance(block, Ran):
+            components.extend(
+                _ran(block_id, block.result, _runnable(block.result.path, screen.can_run))
+            )
 
     components.insert(0, {"id": "root", "component": "Column", "children": root_children})
     return components, data
@@ -354,11 +397,20 @@ def _open(path: str, kind: str) -> dict[str, Any]:
     return {"event": {"name": "open", "context": {"target": path, "kind": kind}}}
 
 
-def _file(block_id: str, file: FileText) -> list[Component]:
-    """A file's text, shown as it is on disk."""
+def _file(block_id: str, file: FileText, runnable: bool) -> list[Component]:
+    """A file's text, shown as it is on disk, with buttons to edit or run it."""
     head = f"{_tilde(file.path)} · {human_size(file.size)}"
     components = [_plain(f"{block_id}_head", head, "caption")]
     children = [f"{block_id}_head"]
+    buttons = []
+    # A file read in part may still be short enough to edit; opening it reads it whole.
+    if file.sha256 is not None or file.size <= MAX_EDIT_BYTES:
+        buttons.append((f"{block_id}_edit", "Edit", "edit", {"target": file.path}, "default"))
+    if runnable:
+        buttons.append((f"{block_id}_run", "Run", "run", {"target": file.path}, "default"))
+    if buttons:
+        components.extend(_buttons(f"{block_id}_actions", buttons))
+        children.append(f"{block_id}_actions")
     if file.content:
         components.append(_fenced(f"{block_id}_text", file.content, Path(file.path).suffix[1:]))
         children.append(f"{block_id}_text")
@@ -386,6 +438,147 @@ def _image(block_id: str, image: ImageFile) -> list[Component]:
             "children": [f"{block_id}_head", f"{block_id}_image"],
         },
     ]
+
+
+def _editor(
+    block_id: str, editor: Editor, runnable: bool
+) -> tuple[list[Component], dict[str, str]]:
+    """A file open for editing. Save sends what is in the editor, and the hash the
+    file had when it was opened, which the write checks."""
+    size = human_size(len(editor.content.encode("utf-8")))
+    content = {"path": f"/{block_id}/content"}
+    buttons = [
+        (
+            f"{block_id}_save",
+            "Save",
+            "save",
+            {"target": editor.path, "base": editor.sha256, "content": content},
+            "primary",
+        )
+    ]
+    if runnable:
+        buttons.append((f"{block_id}_run", "Run", "run", {"target": editor.path}, "default"))
+    components = [
+        _plain(f"{block_id}_head", f"{_tilde(editor.path)} · {size}", "caption"),
+        {
+            "id": f"{block_id}_code",
+            "component": "CodeEditor",
+            "value": content,
+            "language": _LANGUAGES.get(Path(editor.path).suffix.lower(), ""),
+            "label": Path(editor.path).name,
+        },
+        *_buttons(f"{block_id}_actions", buttons),
+    ]
+    children = [f"{block_id}_head", f"{block_id}_code", f"{block_id}_actions"]
+    if runnable:
+        note = "Run runs the file as saved, in a sandbox without network access."
+        components.append(_plain(f"{block_id}_note", note, "caption"))
+        children.append(f"{block_id}_note")
+    components.append({"id": block_id, "component": "Column", "children": children})
+    return components, {"content": editor.content}
+
+
+def _proposal(block_id: str, proposal: Proposal) -> list[Component]:
+    """A change the model proposed: nothing happens to the file unless the user applies it."""
+    what = "Proposed new file" if proposal.created else "Proposed change to"
+    context = {"proposal": proposal.id}
+    note = "Nothing is changed until you apply it, and an applied change can be undone."
+    return [
+        _plain(f"{block_id}_head", f"{what} {_tilde(proposal.path)}", "caption"),
+        _fenced(f"{block_id}_diff", proposal.diff, "diff"),
+        *_buttons(
+            f"{block_id}_actions",
+            [
+                (f"{block_id}_apply", "Apply", "apply", context, "primary"),
+                (f"{block_id}_discard", "Discard", "discard", context, "default"),
+            ],
+        ),
+        _plain(f"{block_id}_note", note, "caption"),
+        {
+            "id": block_id,
+            "component": "Column",
+            "children": [
+                f"{block_id}_head",
+                f"{block_id}_diff",
+                f"{block_id}_actions",
+                f"{block_id}_note",
+            ],
+        },
+    ]
+
+
+def _changed(block_id: str, changed: Changed) -> list[Component]:
+    what = "Created" if changed.created else "Saved"
+    return [
+        _plain(f"{block_id}_text", f"{what} {_tilde(changed.path)}.", "caption"),
+        *_buttons(
+            f"{block_id}_actions",
+            [(f"{block_id}_undo", "Undo", "undo", {"backup": changed.backup}, "default")],
+        ),
+        {
+            "id": block_id,
+            "component": "Row",
+            "children": [f"{block_id}_text", f"{block_id}_actions"],
+            "align": "center",
+        },
+    ]
+
+
+def _ran(block_id: str, result: RunResult, runnable: bool) -> list[Component]:
+    """What running a file printed, as it printed it."""
+    if result.timed_out:
+        how = "stopped: it took too long"
+    else:
+        how = f"exit code {result.exit_code}"
+    head = f"$ {result.command} · {how} · {result.seconds:.1f} s"
+    components = [_plain(f"{block_id}_head", head, "caption")]
+    children = [f"{block_id}_head"]
+    for name, label, text in (("out", "Output", result.stdout), ("err", "Errors", result.stderr)):
+        if text:
+            components.append(_plain(f"{block_id}_{name}_label", label, "caption"))
+            components.append(_fenced(f"{block_id}_{name}", text.rstrip("\n"), ""))
+            children += [f"{block_id}_{name}_label", f"{block_id}_{name}"]
+    if not result.stdout and not result.stderr:
+        components.append(_plain(f"{block_id}_quiet", "It printed nothing.", "caption"))
+        children.append(f"{block_id}_quiet")
+    if result.truncated:
+        components.append(_plain(f"{block_id}_more", "The output was cut off.", "caption"))
+        children.append(f"{block_id}_more")
+    buttons = [(f"{block_id}_edit", "Edit", "edit", {"target": result.path}, "default")]
+    if runnable:
+        buttons.insert(
+            0, (f"{block_id}_again", "Run again", "run", {"target": result.path}, "default")
+        )
+    components.extend(_buttons(f"{block_id}_actions", buttons))
+    children.append(f"{block_id}_actions")
+    components.append({"id": block_id, "component": "Column", "children": children})
+    return components
+
+
+def _buttons(
+    row_id: str, buttons: list[tuple[str, str, str, dict[str, Any], str]]
+) -> list[Component]:
+    """A row of buttons, each (id, label, action name, action context, variant)."""
+    components: list[Component] = []
+    for button_id, label, name, context, variant in buttons:
+        components.append({"id": f"{button_id}_label", "component": "Text", "text": label})
+        components.append(
+            {
+                "id": button_id,
+                "component": "Button",
+                "variant": variant,
+                "child": f"{button_id}_label",
+                "action": {"event": {"name": name, "context": context}},
+            }
+        )
+    components.append(
+        {"id": row_id, "component": "Row", "children": [b[0] for b in buttons], "align": "center"}
+    )
+    return components
+
+
+def _runnable(path: str, can_run: list[str]) -> bool:
+    return Path(path).suffix.lower() in can_run
 
 
 def _tilde(path: str) -> str:

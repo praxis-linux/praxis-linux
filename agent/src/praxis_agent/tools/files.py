@@ -1,8 +1,9 @@
-"""The agent's view of the praxis-fs MCP server: typed lookups and their results.
+"""The agent's view of the praxis-fs MCP server: typed requests and their results.
 
-The server is read-only and confined to the folders the user allows; see
-mcp-servers/praxis-fs. Everything here goes through MCP — the agent never opens
-the user's files itself.
+The server is confined to the folders the user allows; see mcp-servers/praxis-fs.
+Everything here goes through MCP — the agent never opens the user's files itself.
+The model may ask for lookups. Writes are only ever asked for by the user's own
+click; see the server.
 """
 
 import os
@@ -12,7 +13,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from mcp import Client, StdioServerParameters
 from pydantic import BaseModel, Field
@@ -23,6 +24,8 @@ TOOL_TIMEOUT_SECONDS = 30.0
 # How much of a result the model is shown. The Canvas shows all of it.
 MODEL_ENTRIES = 30
 MODEL_FILE_CHARS = 4000
+# The longest file the editor opens. praxis-fs reads at most this much.
+MAX_EDIT_BYTES = 64_000
 
 
 class Entry(BaseModel):
@@ -46,6 +49,8 @@ class FileText(BaseModel):
     size: int
     content: str
     truncated: bool
+    # Set when the whole file was read and is UTF-8 text: needed to change it.
+    sha256: str | None = None
 
 
 class ImageFile(BaseModel):
@@ -54,6 +59,21 @@ class ImageFile(BaseModel):
     media_type: Literal["image/png", "image/jpeg", "image/gif", "image/webp"]
     # The file's bytes, base64-encoded.
     data: str
+
+
+class Written(BaseModel):
+    path: str
+    size: int
+    sha256: str
+    created: bool
+    # What undoes the write.
+    backup: str
+
+
+class Undone(BaseModel):
+    path: str
+    # True when the write being undone had created the file.
+    removed: bool
 
 
 # --- Lookups the model can ask for. `do` comes first so it commits to one. ---
@@ -131,6 +151,57 @@ class ReadImage(BaseModel):
 
 Lookup = SearchFiles | RecentFiles | ListDirectory | ReadTextFile | ReadImage
 
+
+# --- Requests only the user's clicks make. ---
+
+
+class OpenForEditing(BaseModel):
+    """Read a whole file, as long as the editor takes, to edit it."""
+
+    path: str
+
+    def call(self) -> tuple[str, dict[str, Any]]:
+        return "read_text_file", {"path": self.path, "max_bytes": MAX_EDIT_BYTES}
+
+
+class WriteFile(BaseModel):
+    """Write a file the user saved or a change the user applied."""
+
+    # What a failure leaves behind, said to the user.
+    failed: ClassVar[str] = "nothing was changed"
+
+    path: str
+    content: str
+    # The hash of the file being changed; None to create a new file.
+    expected_sha256: str | None
+
+    def call(self) -> tuple[str, dict[str, Any]]:
+        return "write_text_file", {
+            "path": self.path,
+            "content": self.content,
+            "expected_sha256": self.expected_sha256,
+        }
+
+    def audited(self) -> dict[str, Any]:
+        """What the audit log keeps: never the text itself."""
+        return {
+            "path": self.path,
+            "chars": len(self.content),
+            "expected_sha256": self.expected_sha256,
+        }
+
+
+class UndoWrite(BaseModel):
+    failed: ClassVar[str] = "nothing was changed"
+
+    backup: str
+
+    def call(self) -> tuple[str, dict[str, Any]]:
+        return "undo_write", {"backup": self.backup}
+
+
+FileRequest = Lookup | OpenForEditing | WriteFile | UndoWrite
+
 # The file names a click opens as an image rather than as text. praxis-fs checks
 # the bytes; this only picks which tool to ask.
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
@@ -158,10 +229,15 @@ class FileTools:
         tools.roots = (await tools._call("allowed_folders", {}))["result"]
         return tools
 
-    async def run(self, lookup: Lookup) -> Listing | FileText | ImageFile:
-        tool, arguments = lookup.call()
+    async def run(self, request: FileRequest) -> Listing | FileText | ImageFile | Written | Undone:
+        tool, arguments = request.call()
         result = await self._call(tool, arguments)
-        kind = {"read_text_file": FileText, "read_image": ImageFile}.get(tool, Listing)
+        kind = {
+            "read_text_file": FileText,
+            "read_image": ImageFile,
+            "write_text_file": Written,
+            "undo_write": Undone,
+        }.get(tool, Listing)
         return kind.model_validate(result)
 
     def parent(self, directory: str) -> str | None:
@@ -171,13 +247,16 @@ class FileTools:
         return str(parent) if inside and str(parent) != directory else None
 
     async def _call(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        result = await self._client.call_tool(
-            tool, arguments, read_timeout_seconds=TOOL_TIMEOUT_SECONDS
-        )
-        if result.is_error:
-            message = result.content[0].text if result.content else f"{tool} failed."
-            raise ToolFailure(message.removeprefix(f"Error executing tool {tool}: "))
-        return result.structured_content or {}
+        return await call_tool(self._client, tool, arguments)
+
+
+async def call_tool(client: Client, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Call an MCP tool; an error it answers with becomes a ToolFailure."""
+    result = await client.call_tool(tool, arguments, read_timeout_seconds=TOOL_TIMEOUT_SECONDS)
+    if result.is_error:
+        message = result.content[0].text if result.content else f"{tool} failed."
+        raise ToolFailure(message.removeprefix(f"Error executing tool {tool}: "))
+    return result.structured_content or {}
 
 
 @asynccontextmanager

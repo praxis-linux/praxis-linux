@@ -10,11 +10,14 @@ Every endpoint but /health answers with newline-delimited JSON, one event per li
 """
 
 import asyncio
+import difflib
 import json
 import logging
+import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -28,25 +31,34 @@ from pydantic_ai.models import Model
 from . import planner, router
 from .audit import AuditLog
 from .memory import Conversations
-from .planner import Draft, Looking, Turn
+from .planner import Draft, Looking, Proposing, Turn
 from .tools.files import (
     IMAGE_SUFFIXES,
+    MODEL_FILE_CHARS,
+    FileRequest,
     FileText,
     FileTools,
     ImageFile,
     ListDirectory,
     Listing,
     Lookup,
+    OpenForEditing,
     ReadImage,
     ReadTextFile,
     RecentFiles,
     SearchFiles,
     ToolFailure,
+    Undone,
+    UndoWrite,
+    WriteFile,
+    Written,
     praxis_fs,
     relative,
 )
+from .tools.run import RunFile, RunResult, RunTools, praxis_run
 from .ui import Screen, build_trail, compile_screen, replace, update
 from .ui.a2ui import WORKSPACE_SURFACE
+from .ui.plan import Changed, Editor, Proposal, Ran, TextBlock
 
 log = logging.getLogger("praxis_agent")
 
@@ -58,6 +70,13 @@ ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 
 # The longest request, typed or carried by an action, that is passed to a model.
 MAX_REQUEST_CHARS = 8000
+# The most text a Save may carry. praxis-fs has its own, similar limit.
+MAX_SAVE_CHARS = 1_000_000
+# Proposed changes kept waiting per conversation; older ones expire.
+MAX_PENDING = 20
+
+# Actions that act on a file the user chose, without a model.
+FILE_ACTIONS = {"edit", "save", "run", "apply", "discard", "undo"}
 
 
 class IntentRequest(BaseModel):
@@ -128,6 +147,43 @@ def lookup_for_open(action: Action) -> ListDirectory | ReadTextFile | ReadImage:
     raise HTTPException(status_code=400, detail="An open action needs a target and a kind.")
 
 
+def context_text(action: Action, key: str, *, limit: int = 4096, empty: bool = False) -> str:
+    """A text value from an action's context, or a 400 if it is missing or too long."""
+    value = action.context.get(key)
+    if isinstance(value, str) and (value or empty) and len(value) <= limit:
+        return value
+    raise HTTPException(status_code=400, detail=f"A {action.name} action needs {key}.")
+
+
+def file_action_args(action: Action) -> dict[str, str]:
+    """What a file action carries, checked before anything is streamed back."""
+    if action.name == "save":
+        return {
+            "target": context_text(action, "target"),
+            "base": context_text(action, "base", limit=64),
+            "content": context_text(action, "content", limit=MAX_SAVE_CHARS, empty=True),
+        }
+    key = {"apply": "proposal", "discard": "proposal", "undo": "backup"}.get(action.name, "target")
+    return {key: context_text(action, key)}
+
+
+@dataclass
+class PendingChange:
+    """A change the model proposed, waiting for the user's Apply."""
+
+    path: str
+    # The hash the file had when the change was proposed; None for a new file.
+    base: str | None
+    content: str
+
+
+def unified_diff(old: str, new: str, name: str) -> str:
+    lines = difflib.unified_diff(
+        old.splitlines(), new.splitlines(), fromfile=f"a/{name}", tofile=f"b/{name}", lineterm=""
+    )
+    return "\n".join(lines)
+
+
 def turn_to_revisit(action: Action) -> int:
     turn = action.context.get("turn")
     if isinstance(turn, int) and not isinstance(turn, bool) and turn > 0:
@@ -158,6 +214,13 @@ def on_screen(screen: Screen, main_folder: str) -> str | None:
     for block in reversed(screen.blocks):
         if isinstance(block, FileText):
             return f"the file {relative(block.path, main_folder)}"
+        if isinstance(block, Editor):
+            return f"the file {relative(block.path, main_folder)}, open in the editor"
+        if isinstance(block, Proposal):
+            where = relative(block.path, main_folder)
+            return f"a proposed change to {where}, which the user has not applied"
+        if isinstance(block, Ran):
+            return _run_for_model(block.result, main_folder)
         if isinstance(block, ImageFile):
             return f"the image {relative(block.path, main_folder)}, which you cannot see"
         if isinstance(block, Listing) and block.pattern is None:
@@ -171,10 +234,14 @@ def create_app(
     conversations: Conversations | None = None,
     model_for: Callable[[str], Model] = planner.litellm_model,
     connect_files: Callable[[], AbstractAsyncContextManager[FileTools]] = praxis_fs,
+    connect_runner: Callable[[], AbstractAsyncContextManager[RunTools]] = praxis_run,
 ) -> FastAPI:
     audit_log = audit or AuditLog()
     memory = conversations or Conversations()
     tools: dict[str, FileTools] = {}
+    runners: dict[str, RunTools] = {}
+    # Changes the model proposed, per conversation, by id.
+    proposals: dict[str, dict[str, PendingChange]] = {}
     # What each session's user is looking at: the file or folder on screen, if any.
     viewing: dict[str, str | None] = {}
     # Turns being worked on right now, so the kill switch can stop every one of them.
@@ -182,8 +249,16 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        async with connect_files() as files:
-            tools["files"] = files
+        async with AsyncExitStack() as stack:
+            tools["files"] = await stack.enter_async_context(connect_files())
+            try:
+                runners["run"] = await stack.enter_async_context(connect_runner())
+            except Exception:
+                # Everything else works without it; there is just no Run button.
+                log.exception("praxis-run could not be started")
+                runners["run"] = RunTools.unavailable("The code runner could not be started.")
+            if not runners["run"].status.available:
+                log.info("files cannot be run here: %s", runners["run"].status.reason)
             yield
 
     app = FastAPI(title="Praxis agent", lifespan=lifespan)
@@ -218,26 +293,38 @@ def create_app(
     def main_folder() -> str:
         return tools["files"].roots[0]
 
-    async def look_up(session_id: str, lookup: Lookup, asked_by: str) -> Listing | FileText:
-        """Run a file lookup, recorded in the audit log before it happens."""
-        tool, arguments = lookup.call()
+    def can_run() -> list[str]:
+        return runners["run"].can_run()
+
+    async def use(
+        session_id: str, request: FileRequest | RunFile, asked_by: str
+    ) -> Listing | FileText | ImageFile | Written | Undone | RunResult:
+        """Make a tool call, recorded in the audit log before it happens."""
+        tool, arguments = request.call()
+        # What a failure leaves undone, in the words the user is given.
+        failed = getattr(request, "failed", "nothing was read")
+        service = "code runner" if isinstance(request, RunFile) else "file service"
+        audited = request.audited() if isinstance(request, WriteFile) else arguments
         try:
             call_id = audit_log.begin_tool(
-                session_id=session_id, tool=tool, arguments=arguments, asked_by=asked_by
+                session_id=session_id, tool=tool, arguments=audited, asked_by=asked_by
             )
         except Exception as error:
             # No audit row, no file access.
             log.exception("audit log unavailable; refusing tool call")
-            raise ToolFailure("The audit log is unavailable, so nothing was read.") from error
+            raise ToolFailure(f"The audit log is unavailable, so {failed}.") from error
         try:
-            result = await tools["files"].run(lookup)
+            if isinstance(request, RunFile):
+                result: Any = await runners["run"].run(request)
+            else:
+                result = await tools["files"].run(request)
         except ToolFailure as failure:
             audit_log.finish_tool(call_id, error=str(failure)[:500])
             raise
         except Exception as error:
-            log.exception("praxis-fs failed")
+            log.exception("%s failed", service)
             audit_log.finish_tool(call_id, error=repr(error)[:500])
-            raise ToolFailure("The file service did not answer, so nothing was read.") from error
+            raise ToolFailure(f"The {service} did not answer, so {failed}.") from error
         except BaseException:
             # The Canvas went away mid-turn, or the agent is shutting down.
             audit_log.finish_tool(call_id, status="cancelled")
@@ -286,11 +373,13 @@ def create_app(
                 prompt,
                 model=model_for(route.model),
                 history=memory.history(session_id),
-                lookup=lambda lookup: look_up(session_id, lookup, "model"),
+                lookup=lambda lookup: use(session_id, lookup, "model"),
                 main_folder=main_folder(),
             ):
                 if isinstance(event, Looking):
                     yield _line(type="status", text=status_for(event.lookup))
+                elif isinstance(event, Proposing):
+                    yield _line(type="status", text=f"Writing a change to {event.path}…")
                 elif isinstance(event, Draft):
                     for line in canvas.draw(event.screen):
                         yield line
@@ -313,6 +402,9 @@ def create_app(
         )
 
         screen = result.screen()
+        if result.proposal is not None:
+            screen = await propose(session_id, result)
+        screen.can_run = can_run()
         viewing[session_id] = shown = on_screen(screen, main_folder())
         # Stored before it is drawn: a Canvas that goes away during the last drawing
         # still finds the turn in its trail when it comes back.
@@ -337,14 +429,74 @@ def create_app(
         for line in _trail(memory, session_id, current=n):
             yield line
 
+    async def propose(session_id: str, turn: Turn) -> Screen:
+        """The screen for a change the model proposed: the change as a diff, which the
+        user applies or not. Nothing is written here."""
+        proposal = turn.proposal
+        assert proposal is not None
+        blocks: list[Any] = list(turn.reply.blocks)
+        screen = Screen(mode="code", title=turn.reply.title, blocks=blocks)
+        where = proposal.path
+
+        def not_changed(reason: str) -> Screen:
+            blocks.append(TextBlock(kind="text", style="caption", text=f"Not changed: {reason}"))
+            return screen
+
+        try:
+            current = await use(session_id, OpenForEditing(path=proposal.path), "model")
+        except ToolFailure as failure:
+            if failure.refused or not str(failure).startswith("There is no file"):
+                return not_changed(str(failure))
+            current = None
+        if isinstance(current, FileText):
+            where = relative(current.path, main_folder())
+            if current.sha256 is None:
+                return not_changed(f"{where} is too long, or not plain text, for Praxis to change.")
+            if len(current.content) > MODEL_FILE_CHARS:
+                return not_changed(
+                    f"{where} is longer than Praxis can change yet: "
+                    f"the model sees only its first {MODEL_FILE_CHARS:,} characters."
+                )
+            old = current.content
+        else:
+            old = ""
+        new = proposal.content
+        # Models often drop the final line break; a file keeps ending as it did, and a
+        # new file ends with one, like any text file.
+        if new and not new.endswith("\n") and (current is None or old.endswith("\n")):
+            new += "\n"
+        if current is not None and old.replace("\r\n", "\n") == new.replace("\r\n", "\n"):
+            return not_changed("the proposed text is the same as the file.")
+
+        pending = proposals.setdefault(session_id, {})
+        while len(pending) >= MAX_PENDING:
+            pending.pop(next(iter(pending)))
+        change_id = secrets.token_hex(8)
+        if isinstance(current, FileText):
+            path, base = current.path, current.sha256
+        else:
+            path, base = str(Path(main_folder(), proposal.path).expanduser()), None
+        pending[change_id] = PendingChange(path=path, base=base, content=new)
+        blocks.append(
+            Proposal(
+                id=change_id,
+                path=path,
+                diff=unified_diff(old, new, where),
+                created=current is None,
+            )
+        )
+        if current is None:
+            screen.title = f"New file {Path(path).name}"
+        return screen
+
     async def open_path(
         session_id: str, lookup: ListDirectory | ReadTextFile
     ) -> AsyncIterator[str]:
         """Browse by clicking: straight to the tool, no model involved."""
         try:
-            result = await look_up(session_id, lookup, "user")
+            result = await use(session_id, lookup, "user")
         except ToolFailure as failure:
-            # look_up turns every failure of the file service into a ToolFailure.
+            # use() turns every failure of the file service into a ToolFailure.
             yield _line(type="error", message=str(failure))
             return
         if isinstance(result, Listing):
@@ -352,8 +504,107 @@ def create_app(
         else:
             shown, up = result.path, None
         screen = Screen(mode="file", title=Path(shown).name or shown, blocks=[result], up=up)
+        for line in show(session_id, screen):
+            yield line
+
+    def show(session_id: str, screen: Screen) -> list[str]:
+        """Draw a screen no model was involved in, and note what it shows."""
+        screen.can_run = can_run()
         viewing[session_id] = on_screen(screen, main_folder())
-        for line in _Workspace().draw(screen):
+        return _Workspace().draw(screen)
+
+    def editing(changed: Changed | None, path: str, content: str, sha256: str) -> Screen:
+        blocks: list[Any] = [Editor(path=path, content=content, sha256=sha256)]
+        if changed is not None:
+            blocks.insert(0, changed)
+        return Screen(mode="code", title=Path(path).name, blocks=blocks)
+
+    async def on_file(session_id: str, name: str, args: dict[str, str]) -> AsyncIterator[str]:
+        """Edit, save, run, apply, discard, undo: what the user's clicks on a file do.
+
+        No model is involved. Every write is one the user asked for with this click,
+        and checked against the file as they saw it.
+        """
+        try:
+            if name == "edit":
+                target = args["target"]
+                opened = await use(session_id, OpenForEditing(path=target), "user")
+                assert isinstance(opened, FileText)
+                if opened.sha256 is None:
+                    yield _line(
+                        type="error",
+                        message=f"Praxis can only edit a whole text file of up to 64 KB, "
+                        f"and {Path(opened.path).name} is not one.",
+                    )
+                    return
+                screen = editing(None, opened.path, opened.content, opened.sha256)
+            elif name == "save":
+                target, base, content = args["target"], args["base"], args["content"]
+                written = await use(
+                    session_id,
+                    WriteFile(path=target, content=content, expected_sha256=base),
+                    "user",
+                )
+                assert isinstance(written, Written)
+                changed = Changed(path=written.path, created=written.created, backup=written.backup)
+                screen = editing(changed, written.path, content, written.sha256)
+            elif name == "run":
+                target = args["target"]
+                if not runners["run"].status.available:
+                    yield _line(type="error", message=runners["run"].status.reason)
+                    return
+                ran = await use(session_id, RunFile(path=target), "user")
+                assert isinstance(ran, RunResult)
+                screen = Screen(
+                    mode="code", title=f"Ran {Path(ran.path).name}", blocks=[Ran(result=ran)]
+                )
+            elif name == "apply":
+                change = proposals.get(session_id, {}).pop(args["proposal"], None)
+                if change is None:
+                    yield _line(
+                        type="error",
+                        message="This change is no longer waiting: it was applied or discarded "
+                        "already, or the agent has restarted since.",
+                    )
+                    return
+                request = WriteFile(
+                    path=change.path, content=change.content, expected_sha256=change.base
+                )
+                written = await use(session_id, request, "user")
+                assert isinstance(written, Written)
+                changed = Changed(path=written.path, created=written.created, backup=written.backup)
+                screen = editing(changed, written.path, change.content, written.sha256)
+            elif name == "discard":
+                proposals.get(session_id, {}).pop(args["proposal"], None)
+                note = TextBlock(
+                    kind="text", style="caption", text="Discarded. Nothing was changed."
+                )
+                screen = Screen(mode="code", title="Discarded", blocks=[note])
+            else:
+                undone = await use(session_id, UndoWrite(backup=args["backup"]), "user")
+                assert isinstance(undone, Undone)
+                where = relative(undone.path, main_folder())
+                if undone.removed:
+                    text = f"Undone: {where} is removed again."
+                else:
+                    text = f"Undone: {where} is back as it was."
+                blocks: list[Any] = [TextBlock(kind="text", style="caption", text=text)]
+                if not undone.removed:
+                    try:
+                        blocks.append(
+                            await use(
+                                session_id,
+                                ReadTextFile(do="read_text_file", path=undone.path),
+                                "user",
+                            )
+                        )
+                    except ToolFailure:
+                        pass
+                screen = Screen(mode="code", title="Undone", blocks=blocks)
+        except ToolFailure as failure:
+            yield _line(type="error", message=str(failure))
+            return
+        for line in show(session_id, screen):
             yield line
 
     async def show_turn(session_id: str, n: int) -> AsyncIterator[str]:
@@ -397,6 +648,9 @@ def create_app(
             return stream(open_path(session_id, lookup_for_open(body.action)))
         if body.action.name == "revisit":
             return stream(show_turn(session_id, turn_to_revisit(body.action)))
+        if body.action.name in FILE_ACTIONS:
+            args = file_action_args(body.action)
+            return stream(on_file(session_id, body.action.name, args))
         prompt, label = prompt_for_action(body.action)
         return stream(turn(session_id, prompt, label, f"action:{body.action.name}"))
 
@@ -423,6 +677,7 @@ def create_app(
         The audit log keeps its records, which hold no prompt text or file contents.
         """
         viewing.pop(session_id, None)
+        proposals.pop(session_id, None)
         return {"forgotten": memory.forget(session_id)}
 
     return app
@@ -464,6 +719,20 @@ def _trail(memory: Conversations, session_id: str, *, current: int) -> list[str]
         _line(type="a2ui", message=message)
         for message in build_trail(memory.turns(session_id), current=current)
     ]
+
+
+def _run_for_model(result: RunResult, main_folder: str) -> str:
+    """What the model is told about a run on screen: enough to explain an error."""
+    where = relative(result.path, main_folder)
+    if result.timed_out:
+        how = "it was stopped for taking too long"
+    else:
+        how = f"it exited with code {result.exit_code}"
+    said = []
+    for name, text in (("output", result.stdout), ("errors", result.stderr)):
+        if text.strip():
+            said.append(f"{name}:\n{text[-1500:]}")
+    return f"the result of running {where}: {how}" + ("\n" + "\n".join(said) if said else "")
 
 
 def _line(**event: Any) -> str:

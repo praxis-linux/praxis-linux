@@ -3,12 +3,17 @@
 from datetime import UTC, datetime
 
 from praxis_agent.tools.files import Entry, FileText, ImageFile, Listing
+from praxis_agent.tools.run import RunResult
 from praxis_agent.ui.plan import (
     Card,
     CardsBlock,
+    Changed,
     CodeBlock,
+    Editor,
     FormBlock,
     FormField,
+    Proposal,
+    Ran,
     Screen,
     TextBlock,
     UIPlan,
@@ -89,4 +94,35 @@ SAMPLE_SCREEN = Screen(
     title=SAMPLE_REPLY.title,
     blocks=[*SAMPLE_REPLY.blocks, SAMPLE_LISTING, SAMPLE_FILE, SAMPLE_IMAGE],
     up="/home/ada",
+)
+
+APP = "/home/ada/projects/app.py"
+
+# Every Code mode block: also written to a golden file for the Canvas tests.
+SAMPLE_CODE_SCREEN = Screen(
+    mode="code",
+    title="app.py",
+    blocks=[
+        Changed(path=APP, created=False, backup="20261025T120000-0a1b2c3d"),
+        Editor(path=APP, content="print('hi')\n", sha256="ab" * 32),
+        Proposal(
+            id="c0ffee",
+            path=APP,
+            diff="--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-print('hi')\n+print('bye')",
+            created=False,
+        ),
+        Ran(
+            result=RunResult(
+                path=APP,
+                command="python3 app.py",
+                exit_code=1,
+                stdout="hi\n",
+                stderr="Traceback: boom\n",
+                timed_out=False,
+                truncated=False,
+                seconds=0.25,
+            )
+        ),
+    ],
+    can_run=[".py"],
 )

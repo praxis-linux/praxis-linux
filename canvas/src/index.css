@@ -96,6 +96,15 @@ html, body, #root {
 /* A link the agent wrote: shown with its address, never followed. */
 .agent-link { color: var(--accent); }
 
+.code-editor {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.code-editor .cm-editor { max-height: 60vh; }
+.code-editor .cm-editor.cm-focused { outline: 1px solid var(--accent-dim); }
+.code-editor .cm-scroller { overflow: auto; }
+
 .workspace-error {
   max-width: 640px;
   padding: 10px 14px;
@@ -273,6 +282,11 @@ html, body, #root {
 }
 .praxis-button.borderless:hover { background: var(--bg-elevated); }
 .praxis-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Buttons side by side act on what is above them (Edit, Run, Undo): compact, not cards. */
+div[style*="flex-direction: row"] .praxis-button.default {
+  width: auto;
+  padding: 6px 16px;
+}
 .praxis-button:disabled { opacity: 0.5; cursor: default; }
 
 .a2ui-host label {
