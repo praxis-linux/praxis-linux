@@ -4,7 +4,7 @@ End-to-end demo flows for Praxis.
 
 ## Status
 
-Placeholder. First examples land with milestone **M0.13** — see [Roadmap](../docs/ROADMAP.md).
+The launch demo is ready to record: [`90s-demo`](90s-demo/README.md). The others are still planned — see [Roadmap](../docs/ROADMAP.md).
 
 ## Planned demos
 
