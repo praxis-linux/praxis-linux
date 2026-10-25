@@ -1,14 +1,17 @@
 """Read-only access to the folders the user allows.
 
 Every path is resolved (following symlinks) and must land inside an allowed
-root. Hidden entries — any name starting with a dot, which covers `.ssh`,
-`.env`, `.git` and Praxis's own `.praxis` — are neither listed nor readable
-unless hidden access is switched on.
+root. Hidden entries are neither listed nor readable unless hidden access is
+switched on: any name starting with a dot, which covers `.ssh`, `.env`, `.git`
+and Praxis's own `.praxis`, and on Windows anything with the hidden or system
+attribute, which covers `AppData`.
 """
 
 import fnmatch
 import os
 import re
+import stat
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -19,6 +22,8 @@ from pydantic import BaseModel
 MAX_ENTRIES = 200
 MAX_SCANNED = 50_000
 MAX_READ_BYTES = 64_000
+SEARCH_SECONDS = 10.0
+MAX_DAYS = 36_500
 
 # Large, machine-generated trees that are never what the user is looking for.
 SKIPPED_DIRECTORIES = {"node_modules", "__pycache__"}
@@ -89,10 +94,21 @@ class Files:
         if root is None:
             allowed = ", ".join(str(root) for root in self.roots)
             raise Refused(f"{asked} is outside the folders Praxis may read ({allowed}).")
-        if not self.allow_hidden and any(
-            _hidden(part) for part in resolved.relative_to(root).parts
-        ):
-            raise Refused(f"{asked} is hidden, and Praxis does not read hidden files or folders.")
+        relative = resolved.relative_to(root)
+        # On Windows "name:stream" opens an alternate data stream, a second file
+        # hidden inside a visible one.
+        if os.name == "nt" and any(":" in part for part in relative.parts):
+            raise Refused(f"{asked} names a hidden part of a file, which Praxis does not read.")
+        if self.allow_hidden:
+            return
+        hidden = f"{asked} is hidden, and Praxis does not read hidden files or folders."
+        if any(_hidden(part) for part in relative.parts):
+            raise Refused(hidden)
+        below = root
+        for part in relative.parts:
+            below = below / part
+            if _hidden_by_attribute(below):
+                raise Refused(hidden)
 
     def list_directory(self, path: str = "") -> Listing:
         directory = self._directory(path)
@@ -103,34 +119,50 @@ class Files:
     def search_files(
         self, pattern: str = "*", directory: str = "", modified_within_days: int | None = None
     ) -> Listing:
-        """Files under `directory`, at any depth, whose name matches `pattern`. Newest first."""
+        """Files under `directory`, at any depth, whose name matches `pattern`. Newest first.
+
+        The search never follows a symlink or junction into a folder, so a link that
+        loops back cannot make it run forever; and it stops after MAX_SCANNED entries
+        or SEARCH_SECONDS, saying it was cut short.
+        """
         top = self._directory(directory)
         globs = _globs(pattern)
         since = (
-            datetime.now(UTC) - timedelta(days=modified_within_days)
+            datetime.now(UTC) - timedelta(days=min(max(modified_within_days, 0), MAX_DAYS))
             if modified_within_days is not None
             else None
         )
 
         matches: list[Entry] = []
         scanned = 0
-        for current, directories, names in os.walk(top):
-            directories[:] = [d for d in directories if self._descend(d)]
-            for name in names:
+        cut_short = False
+        deadline = time.monotonic() + SEARCH_SECONDS
+        pending = [str(top)]
+        while pending and not cut_short:
+            try:
+                with os.scandir(pending.pop()) as children:
+                    found = list(children)
+            except OSError:
+                continue
+            for child in found:
                 scanned += 1
-                if any(fnmatch.fnmatch(name.lower(), glob) for glob in globs):
-                    entry = self._entry(Path(current) / name)
+                if scanned > MAX_SCANNED or time.monotonic() > deadline:
+                    cut_short = True
+                    break
+                if child.is_dir(follow_symlinks=False):
+                    if not child.is_symlink() and not child.is_junction() and self._descend(child):
+                        pending.append(child.path)
+                elif any(fnmatch.fnmatch(child.name.lower(), glob) for glob in globs):
+                    entry = self._entry(Path(child.path))
                     if (
                         entry
                         and entry.kind == "file"
                         and (since is None or entry.modified >= since)
                     ):
                         matches.append(entry)
-            if scanned >= MAX_SCANNED:
-                break
 
         matches.sort(key=lambda e: e.modified, reverse=True)
-        return _listing(top, matches, pattern=pattern, cut_short=scanned >= MAX_SCANNED)
+        return _listing(top, matches, pattern=pattern, cut_short=cut_short)
 
     def read_text_file(self, path: str, max_bytes: int = 20_000) -> FileText:
         file = self.resolve(path)
@@ -159,26 +191,33 @@ class Files:
             raise AccessError(f"{path} is a file, not a folder.")
         return directory
 
-    def _descend(self, name: str) -> bool:
-        return name not in SKIPPED_DIRECTORIES and (self.allow_hidden or not _hidden(name))
+    def _descend(self, folder: os.DirEntry[str]) -> bool:
+        if folder.name in SKIPPED_DIRECTORIES:
+            return False
+        return self.allow_hidden or not (
+            _hidden(folder.name) or _hidden_by_attribute(Path(folder.path))
+        )
 
     def _entry(self, path: Path) -> Entry | None:
-        if not self.allow_hidden and _hidden(path.name):
+        """`path`, found inside a folder already allowed, if it may be shown."""
+        if not self.allow_hidden and (_hidden(path.name) or _hidden_by_attribute(path)):
             return None
         try:
-            # A symlink is reported only if what it points to could be read too.
-            self._check(path.resolve(), str(path))
-            stat = path.stat()
+            resolved = path.resolve()
+            # A symlink or junction is shown only if what it points to could be read too.
+            if resolved != path:
+                self._check(resolved, str(path))
+            info = path.stat()
         except (AccessError, OSError):
-            # Points somewhere off limits, is a broken symlink, or is gone since it was listed.
+            # Points somewhere off limits, is a broken link, or is gone since it was listed.
             return None
         is_directory = path.is_dir()
         return Entry(
             name=path.name,
             path=str(path),
             kind="directory" if is_directory else "file",
-            size=None if is_directory else stat.st_size,
-            modified=datetime.fromtimestamp(stat.st_mtime, UTC),
+            size=None if is_directory else info.st_size,
+            modified=datetime.fromtimestamp(info.st_mtime, UTC),
         )
 
 
@@ -205,6 +244,22 @@ def _globs(pattern: str) -> list[str]:
 
 def _hidden(name: str) -> bool:
     return name.startswith(".")
+
+
+_HIDDEN_ATTRIBUTES = getattr(stat, "FILE_ATTRIBUTE_HIDDEN", 0) | getattr(
+    stat, "FILE_ATTRIBUTE_SYSTEM", 0
+)
+
+
+def _hidden_by_attribute(path: Path) -> bool:
+    """Whether Windows marks `path` itself hidden or as a system file. Never on other systems."""
+    if os.name != "nt":
+        return False
+    try:
+        attributes = os.stat(path, follow_symlinks=False).st_file_attributes
+    except (OSError, ValueError):
+        return False
+    return bool(attributes & _HIDDEN_ATTRIBUTES)
 
 
 def _listing(

@@ -1,9 +1,11 @@
 import os
+import subprocess
 import time
 from pathlib import Path
 
 import pytest
 
+from praxis_fs import fs
 from praxis_fs.fs import MAX_ENTRIES, AccessError, Files, roots_from_env
 
 DAY = 24 * 60 * 60
@@ -236,6 +238,74 @@ def test_hidden_access_can_be_switched_on(home):
 
     assert ".env" in names(files.list_directory(str(home)))
     assert files.read_text_file(".env").content == "SECRET=1"
+
+
+windows_only = pytest.mark.skipif(os.name != "nt", reason="a Windows file system feature")
+
+
+@windows_only
+def test_files_and_folders_windows_marks_hidden_are_refused(files, home):
+    write(home / "AppData" / "Roaming" / "token.txt", "TOKEN")
+    write(home / "secret.txt", "SECRET")
+    subprocess.run(["attrib", "+h", str(home / "AppData")], check=True)
+    subprocess.run(["attrib", "+h", str(home / "secret.txt")], check=True)
+
+    assert "AppData" not in names(files.list_directory(str(home)))
+    assert "secret.txt" not in names(files.list_directory(str(home)))
+    assert "token.txt" not in names(files.search_files("*.txt"))
+    with pytest.raises(AccessError, match="hidden"):
+        files.read_text_file("AppData/Roaming/token.txt")
+    with pytest.raises(AccessError, match="hidden"):
+        files.read_text_file("secret.txt")
+    with pytest.raises(AccessError, match="hidden"):
+        files.list_directory("AppData")
+
+
+@windows_only
+def test_alternate_data_streams_are_refused(files, home):
+    (home / "notes.txt:hidden").write_text("ADS DATA", encoding="utf-8")
+
+    with pytest.raises(AccessError, match="hidden part of a file"):
+        files.read_text_file("notes.txt:hidden")
+    assert files.read_text_file("notes.txt").content == "hello\nworld\n"
+
+
+def test_a_link_that_loops_back_does_not_make_a_search_run_forever(files, home):
+    link(home / "code" / "loop", home)
+    link(home / "code" / "loop2", home / "code")
+
+    started = time.monotonic()
+    found = files.search_files("app.py")
+
+    assert time.monotonic() - started < 5
+    assert names(found) == ["app.py"]
+    assert not found.truncated
+
+
+def test_folders_count_toward_the_scan_cap(files, home, monkeypatch):
+    for i in range(30):
+        (home / "many" / f"d{i}").mkdir(parents=True)
+    monkeypatch.setattr(fs, "MAX_SCANNED", 10)
+
+    found = files.search_files("*", directory="many")
+
+    assert found.truncated
+
+
+def test_a_search_stops_at_its_time_budget(files, monkeypatch):
+    monkeypatch.setattr(fs, "SEARCH_SECONDS", 0.0)
+
+    found = files.search_files("*")
+
+    assert found.truncated
+    assert found.total == 0
+
+
+def test_an_absurd_number_of_days_is_treated_as_all_time(files):
+    assert names(files.search_files("*.md", modified_within_days=10**12)) == [
+        "report.md",
+        "old.md",
+    ]
 
 
 # --- configuration ---------------------------------------------------------

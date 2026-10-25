@@ -17,14 +17,15 @@ Paths may be absolute, start with `~`, or be relative to the main folder. An emp
 
 ## What it will not read
 
-- **Anything outside the allowed folders.** Every path is resolved, following symlinks, and must land inside an allowed folder. A symlink that points outside is neither followed nor listed.
-- **Hidden files and folders**: any name starting with a dot. That covers `.ssh`, `.env`, `.git` and Praxis's own `.praxis`. They are not listed, not searched and not readable by exact path.
+- **Anything outside the allowed folders.** Every path is resolved, following symlinks and junctions, and must land inside an allowed folder. A link that points outside is neither followed nor listed.
+- **Hidden files and folders**: any name starting with a dot, which covers `.ssh`, `.env`, `.git` and Praxis's own `.praxis`; and on Windows anything with the hidden or system attribute, which covers `AppData`. They are not listed, not searched and not readable by exact path.
+- **Alternate data streams** on Windows (`notes.txt:stream`), a second file hidden inside a visible one.
 - **Binary files.**
 - `node_modules` and `__pycache__` are skipped when searching.
 
 A refusal is returned as a tool error whose text starts with `Refused: `, so a caller can tell "not allowed" from "not there".
 
-Listings stop at 200 entries and a search stops after walking 50,000 files; both say so in the result when they were cut short.
+Listings stop at 200 entries. A search does not follow links into folders, so a link that loops back cannot keep it going; it stops after 50,000 files and folders or 10 seconds, whichever comes first. Both say so in the result when they were cut short.
 
 ## Configuration
 
