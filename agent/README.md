@@ -104,6 +104,8 @@ The model is shown the last ten turns of a conversation: the latest in full, so 
 
 `litellm_config.yaml` defines the model aliases. The agent never talks to Ollama or a cloud provider directly — it talks to LiteLLM, which routes by alias. This is what makes "bring your own model" trivial.
 
+The proxy finds Ollama at `OLLAMA_API_BASE`, or `http://localhost:11434` when that is unset. `scripts/dev.py` sets it; under WSL it looks for Ollama on the Windows side too.
+
 An alias counts as local only if its name starts with `local-`. Anything else is reported to the Canvas and audited as a cloud call.
 
 ## Audit log

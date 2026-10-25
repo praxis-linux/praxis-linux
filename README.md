@@ -40,9 +40,12 @@ cd agent && uv sync && cd ..
 
 python scripts/dev.py          # model proxy, agent and the Canvas desktop window
 python scripts/dev.py --web    # or the Canvas in a browser, at http://localhost:1420
+python scripts/dev.py --wsl    # on Windows: everything in WSL, the window on your desktop
 ```
 
-Ctrl+C stops everything. To run the pieces yourself, see [`agent/README.md`](agent/README.md) and [`canvas/README.md`](canvas/README.md).
+Ctrl+C stops everything.
+
+**On Windows**, the desktop window is easiest through WSL: `--wsl` copies your working tree into WSL (Ubuntu-24.04 unless you name another distro) and starts everything there. Ollama can stay on Windows; your API keys are passed across. Inside WSL you need Rust, uv, Node with corepack and the Tauri prerequisites for Linux. The agent then reads your WSL home folder, not your Windows one. Building natively on Windows also works, but not with Smart App Control on: it blocks the helper programs a Rust build compiles and runs. To run the pieces yourself, see [`agent/README.md`](agent/README.md) and [`canvas/README.md`](canvas/README.md).
 
 Type an intent in the bar at the bottom — try "what is in my Documents folder?". The agent answers from a local model. It can look at the files in your home folder, hidden ones excepted, and cannot change any of them.
 
