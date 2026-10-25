@@ -15,7 +15,7 @@ Stood up at milestone **M0.6**; reads the user's files through the `praxis-fs` M
 5. Draws the reply while the model writes it. What was looked up goes on the screen itself — the listing or the file's text straight from the tool, not the model's retelling. Everything reaches the Canvas as A2UI v0.9 messages, streamed as NDJSON.
 6. Stores the turn, and redraws the conversation trail in the Canvas's context rail.
 
-Some clicks never reach a model: a file or folder (`open`) goes straight to `praxis-fs` and back, and a turn in the trail (`revisit`) brings back that turn's stored screen. `POST /resume` does the same for the last turn when the Canvas opens.
+Some clicks never reach a model: a file or folder (`open`) goes straight to `praxis-fs` and back (an image file comes back as the image, shown inline), and a turn in the trail (`revisit`) brings back that turn's stored screen. `POST /resume` does the same for the last turn when the Canvas opens.
 
 The contract with the Canvas is specified in [ADR-003](../docs/architecture/ADR-003-ui-wire-format.md).
 

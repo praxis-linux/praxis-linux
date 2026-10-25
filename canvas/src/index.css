@@ -83,6 +83,16 @@ html, body, #root {
   color: var(--text-secondary);
 }
 
+/* An image file, carried inline. */
+.file-image {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
 /* A link the agent wrote: shown with its address, never followed. */
 .agent-link { color: var(--accent); }
 

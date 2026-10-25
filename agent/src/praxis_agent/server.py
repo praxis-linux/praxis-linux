@@ -30,11 +30,14 @@ from .audit import AuditLog
 from .memory import Conversations
 from .planner import Draft, Looking, Turn
 from .tools.files import (
+    IMAGE_SUFFIXES,
     FileText,
     FileTools,
+    ImageFile,
     ListDirectory,
     Listing,
     Lookup,
+    ReadImage,
     ReadTextFile,
     RecentFiles,
     SearchFiles,
@@ -112,12 +115,14 @@ def model_failure(error: Exception, alias: str) -> str:
     return f"The model call failed: {type(error).__name__}"
 
 
-def lookup_for_open(action: Action) -> ListDirectory | ReadTextFile:
+def lookup_for_open(action: Action) -> ListDirectory | ReadTextFile | ReadImage:
     """The lookup behind a click on a file or folder."""
     path, kind = action.context.get("target"), action.context.get("kind")
     if isinstance(path, str) and path:
         if kind == "directory":
             return ListDirectory(do="list_directory", path=path)
+        if kind == "file" and Path(path).suffix.lower() in IMAGE_SUFFIXES:
+            return ReadImage(do="read_image", path=path)
         if kind == "file":
             return ReadTextFile(do="read_text_file", path=path)
     raise HTTPException(status_code=400, detail="An open action needs a target and a kind.")
@@ -153,6 +158,8 @@ def on_screen(screen: Screen, main_folder: str) -> str | None:
     for block in reversed(screen.blocks):
         if isinstance(block, FileText):
             return f"the file {relative(block.path, main_folder)}"
+        if isinstance(block, ImageFile):
+            return f"the image {relative(block.path, main_folder)}, which you cannot see"
         if isinstance(block, Listing) and block.pattern is None:
             return f"the folder {relative(block.directory, main_folder)}"
     return None

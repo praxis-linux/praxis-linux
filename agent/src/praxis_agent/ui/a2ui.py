@@ -10,7 +10,7 @@ from datetime import tzinfo
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..tools.files import Entry, FileText, Listing, human_size
+from ..tools.files import Entry, FileText, ImageFile, Listing, human_size
 from .plan import CardsBlock, CodeBlock, FormBlock, Screen, TextBlock
 
 if TYPE_CHECKING:
@@ -117,7 +117,7 @@ def compile_screen(
 
     replies = found = 0
     for block in screen.blocks[:MAX_BLOCKS]:
-        if isinstance(block, Listing | FileText):
+        if isinstance(block, Listing | FileText | ImageFile):
             block_id, found = f"f{found}", found + 1
         else:
             block_id, replies = f"b{replies}", replies + 1
@@ -136,6 +136,8 @@ def compile_screen(
             components.extend(_listing(block_id, block, timezone))
         elif isinstance(block, FileText):
             components.extend(_file(block_id, block))
+        elif isinstance(block, ImageFile):
+            components.extend(_image(block_id, block))
 
     components.insert(0, {"id": "root", "component": "Column", "children": root_children})
     return components, data
@@ -366,6 +368,24 @@ def _file(block_id: str, file: FileText) -> list[Component]:
         children.append(f"{block_id}_more")
     components.append({"id": block_id, "component": "Column", "children": children})
     return components
+
+
+def _image(block_id: str, image: ImageFile) -> list[Component]:
+    """An image, carried inline: the Canvas never fetches anything to show it."""
+    return [
+        _plain(f"{block_id}_head", f"{_tilde(image.path)} · {human_size(image.size)}", "caption"),
+        {
+            "id": f"{block_id}_image",
+            "component": "FileImage",
+            "src": f"data:{image.media_type};base64,{image.data}",
+            "description": Path(image.path).name,
+        },
+        {
+            "id": block_id,
+            "component": "Column",
+            "children": [f"{block_id}_head", f"{block_id}_image"],
+        },
+    ]
 
 
 def _tilde(path: str) -> str:

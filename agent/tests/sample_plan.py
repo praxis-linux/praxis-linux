@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from praxis_agent.tools.files import Entry, FileText, Listing
+from praxis_agent.tools.files import Entry, FileText, ImageFile, Listing
 from praxis_agent.ui.plan import (
     Card,
     CardsBlock,
@@ -73,10 +73,20 @@ SAMPLE_FILE = FileText(
     truncated=False,
 )
 
+# One transparent pixel.
+PIXEL_PNG = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+    "AAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+SAMPLE_IMAGE = ImageFile(
+    path="/home/ada/projects/pixel.png", size=70, media_type="image/png", data=PIXEL_PNG
+)
+
 # Every block type, as the Canvas tests need it: written to the golden file.
 SAMPLE_SCREEN = Screen(
     mode=SAMPLE_REPLY.mode,
     title=SAMPLE_REPLY.title,
-    blocks=[*SAMPLE_REPLY.blocks, SAMPLE_LISTING, SAMPLE_FILE],
+    blocks=[*SAMPLE_REPLY.blocks, SAMPLE_LISTING, SAMPLE_FILE, SAMPLE_IMAGE],
     up="/home/ada",
 )

@@ -11,7 +11,7 @@ Scaffolded at **M0.5**, connected to the agent at **M0.6**, conversational since
 - The intent bar posts what you type to the agent.
 - The agent answers with A2UI messages. `@a2ui/react` renders them; nothing outside the Praxis catalog is accepted.
 - Clicking a card or submitting a form sends an A2UI action to the agent, which answers with the next screen.
-- Files and folders the agent shows are rows you can click: a folder opens its listing, a file its text. Those clicks never go through a model.
+- Files and folders the agent shows are rows you can click: a folder opens its listing, a file its text, an image the image itself (PNG, JPEG, GIF, WebP), carried inline. Those clicks never go through a model.
 - While the agent works, a status line says what it is doing, and the reply is drawn as the model writes it.
 - The context rail shows the conversation so far. Clicking a turn shows its screen again.
 - The conversation id is kept in `localStorage`, so a reload picks up where the conversation left off. "New" starts another conversation; "Delete…" asks, then deletes this one.

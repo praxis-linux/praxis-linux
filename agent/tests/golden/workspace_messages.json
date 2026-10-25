@@ -28,7 +28,8 @@
             "b2",
             "b3",
             "f0",
-            "f1"
+            "f1",
+            "f2"
           ]
         },
         {
@@ -293,6 +294,26 @@
           "children": [
             "f1_head",
             "f1_text"
+          ]
+        },
+        {
+          "id": "f2_head",
+          "component": "Text",
+          "text": "/home/ada/projects/pixel.png · 70 bytes",
+          "variant": "caption"
+        },
+        {
+          "id": "f2_image",
+          "component": "FileImage",
+          "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+          "description": "pixel.png"
+        },
+        {
+          "id": "f2",
+          "component": "Column",
+          "children": [
+            "f2_head",
+            "f2_image"
           ]
         }
       ]

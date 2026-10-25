@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import sqlite3
 import threading
@@ -18,7 +19,7 @@ from praxis_agent.memory import Conversations
 from praxis_agent.server import _Workspace, create_app
 from praxis_agent.tools.files import FileTools
 from praxis_agent.ui.plan import Screen, TextBlock
-from sample_plan import SAMPLE_REPLY
+from sample_plan import PIXEL_PNG, SAMPLE_REPLY
 
 SESSION = {"X-Praxis-Session": "test-session"}
 
@@ -569,6 +570,45 @@ def test_opening_a_file_shows_its_text(client, model, home):
     assert shown["title"]["text"] == "app.py"
     assert shown["f0_text"]["text"] == "```py\nprint('hi')\n\n```"
     assert model.requests == []
+
+
+def test_opening_an_image_shows_it_inline(client, model, audit, home):
+    (home / "pixel.png").write_bytes(base64.b64decode(PIXEL_PNG))
+
+    response = client.post(
+        "/action",
+        json=action("open", {"target": str(home / "pixel.png"), "kind": "file"}),
+        headers=SESSION,
+    )
+
+    shown = workspace(response)
+    assert shown["f0_image"] == {
+        "id": "f0_image",
+        "component": "FileImage",
+        "src": f"data:image/png;base64,{PIXEL_PNG}",
+        "description": "pixel.png",
+    }
+    assert model.requests == []
+    (row,) = rows(audit, "tool_calls")
+    assert (row["tool"], row["asked_by"], row["status"]) == ("read_image", "user", "ok")
+
+    ask(client, "what is this?")
+    assert model.prompt().endswith(
+        "(On the user's screen right now: the image pixel.png, which you cannot see.)"
+    )
+
+
+def test_a_file_named_like_an_image_that_is_not_one_is_not_shown(client, home):
+    (home / "fake.png").write_bytes(b"<svg><script>alert(1)</script></svg>")
+
+    response = client.post(
+        "/action",
+        json=action("open", {"target": str(home / "fake.png"), "kind": "file"}),
+        headers=SESSION,
+    )
+
+    (event,) = events(response)
+    assert event["type"] == "error" and "not an image" in event["message"]
 
 
 def test_opening_something_off_limits_is_an_error_event(client, audit, home):

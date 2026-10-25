@@ -48,6 +48,14 @@ class FileText(BaseModel):
     truncated: bool
 
 
+class ImageFile(BaseModel):
+    path: str
+    size: int
+    media_type: Literal["image/png", "image/jpeg", "image/gif", "image/webp"]
+    # The file's bytes, base64-encoded.
+    data: str
+
+
 # --- Lookups the model can ask for. `do` comes first so it commits to one. ---
 
 
@@ -111,7 +119,21 @@ class ReadTextFile(BaseModel):
         return "read_text_file", {"path": self.path}
 
 
-Lookup = SearchFiles | RecentFiles | ListDirectory | ReadTextFile
+class ReadImage(BaseModel):
+    """Show one image. Asked for by a click, never by the model: a text model cannot see it."""
+
+    do: Literal["read_image"]
+    path: str
+
+    def call(self) -> tuple[str, dict[str, Any]]:
+        return "read_image", {"path": self.path}
+
+
+Lookup = SearchFiles | RecentFiles | ListDirectory | ReadTextFile | ReadImage
+
+# The file names a click opens as an image rather than as text. praxis-fs checks
+# the bytes; this only picks which tool to ask.
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 # praxis-fs starts an error with this when the answer is "not allowed", not "not there".
 REFUSED = "Refused: "
@@ -136,10 +158,11 @@ class FileTools:
         tools.roots = (await tools._call("allowed_folders", {}))["result"]
         return tools
 
-    async def run(self, lookup: Lookup) -> Listing | FileText:
+    async def run(self, lookup: Lookup) -> Listing | FileText | ImageFile:
         tool, arguments = lookup.call()
         result = await self._call(tool, arguments)
-        return (FileText if tool == "read_text_file" else Listing).model_validate(result)
+        kind = {"read_text_file": FileText, "read_image": ImageFile}.get(tool, Listing)
+        return kind.model_validate(result)
 
     def parent(self, directory: str) -> str | None:
         """The folder above `directory`, if that is still somewhere the server may read."""
