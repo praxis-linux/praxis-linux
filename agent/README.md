@@ -54,7 +54,7 @@ uv tool run --from 'litellm[proxy]==1.103.1' litellm \
   --config litellm_config.yaml --host 127.0.0.1 --port 4000
 
 # Terminal 2 — the agent (it starts praxis-fs itself)
-uv run uvicorn praxis_agent.server:create_app --factory --host 127.0.0.1 --port 8000
+uv run uvicorn praxis_agent.server:create_app --factory --host 127.0.0.1 --port 7729
 ```
 
 The proxy is not installed into the agent's environment: it is a separate process, and its dependency pins would otherwise hold back the agent's. Its version is pinned here; raise it deliberately.
@@ -62,7 +62,7 @@ The proxy is not installed into the agent's environment: it is a separate proces
 Try it without the Canvas:
 
 ```bash
-curl -N -X POST http://127.0.0.1:8000/intent \
+curl -N -X POST http://127.0.0.1:7729/intent \
   -H 'Content-Type: application/json' \
   -H 'X-Praxis-Session: my-session-1' \
   -d '{"intent": "what is in my Documents folder?"}'
@@ -79,6 +79,10 @@ curl -N -X POST http://127.0.0.1:8000/intent \
 | `PRAXIS_CONVERSATIONS_DB` | `~/.praxis/conversations.db` | Conversation store location |
 | `PRAXIS_FS_ROOTS` | the home folder | Folders the agent may read — see [`praxis-fs`](../mcp-servers/praxis-fs/README.md) |
 | `PRAXIS_FS_COMMAND` | `python -m praxis_fs` | Command that starts the filesystem server |
+
+## Who can talk to the agent
+
+The agent listens on 127.0.0.1 only. It answers requests that name it as `127.0.0.1` or `localhost` and, if they carry an `Origin`, come from the Canvas. That stops a web page that points its own domain at this machine (DNS rebinding) from using the agent to read your files. It does not stop another program running on this machine as any user: there is no secret between the Canvas and the agent yet. That needs the desktop shell to start the agent and hand the Canvas a token.
 
 ## Files and the model
 
@@ -102,7 +106,7 @@ An alias counts as local only if its name starts with `local-`. Anything else is
 
 Two tables in the audit database, each row written before the call it records:
 
-- `model_calls`: when, which session, which alias, local or cloud, what triggered it, how many characters were sent, how many requests it took, how it ended and how long it took. Prompt text is not in the audit log; it is in the conversation store.
+- `model_calls`: when, which session, which alias, local or cloud, what triggered it, how long the request was (as sent, with the note about what is on screen; earlier turns and lookup results come on top), how many model requests it took, how it ended and how long it took. Prompt text is not in the audit log; it is in the conversation store.
 - `tool_calls`: when, which session, which tool, with what arguments, whether the model or the user asked for it, and how it ended.
 
 ```bash

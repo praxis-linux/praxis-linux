@@ -32,23 +32,19 @@ This repository is intentionally early. Star the repo to follow along.
 
 ## Quickstart (Phase 0 dev preview)
 
-You need [Ollama](https://ollama.com), [uv](https://docs.astral.sh/uv/), Node 20+ with pnpm, and Rust with the [Tauri prerequisites](https://tauri.app/start/prerequisites/).
+You need [Ollama](https://ollama.com), [uv](https://docs.astral.sh/uv/), Node 20+ (pnpm comes through `corepack`), and for the desktop window Rust with the [Tauri prerequisites](https://tauri.app/start/prerequisites/).
 
 ```bash
 ollama pull qwen2.5:7b
+cd agent && uv sync && cd ..
 
-# Terminal 1 — model proxy
-cd agent && uv tool run --from 'litellm[proxy]==1.103.1' litellm   --config litellm_config.yaml --host 127.0.0.1 --port 4000
-
-# Terminal 2 — agent
-cd agent && uv sync
-uv run uvicorn praxis_agent.server:create_app --factory --host 127.0.0.1 --port 8000
-
-# Terminal 3 — Canvas
-cd canvas && pnpm install && pnpm tauri dev
+python scripts/dev.py          # model proxy, agent and the Canvas desktop window
+python scripts/dev.py --web    # or the Canvas in a browser, at http://localhost:1420
 ```
 
-Type an intent in the bar at the bottom — try "what is in my Documents folder?". The agent answers from a local model. It can look at the files in your home folder, hidden ones excepted, and cannot change any of them. Details: [`agent/README.md`](agent/README.md), [`canvas/README.md`](canvas/README.md).
+Ctrl+C stops everything. To run the pieces yourself, see [`agent/README.md`](agent/README.md) and [`canvas/README.md`](canvas/README.md).
+
+Type an intent in the bar at the bottom — try "what is in my Documents folder?". The agent answers from a local model. It can look at the files in your home folder, hidden ones excepted, and cannot change any of them.
 
 ## Architecture in one diagram
 
