@@ -92,7 +92,11 @@ What the model looks up is sent to the model that serves the turn. With a local 
 
 ## Conversations
 
-Each finished turn is stored in the conversation store: the request, the screen that was drawn, and every message the model was sent and answered — **including the text of any file it read**. The store is on this machine, in `~/.praxis`, which `praxis-fs` will not read. Nothing deletes old conversations yet; "New" in the Canvas starts another one and keeps the old.
+Each finished turn is stored in the conversation store: the request, the screen that was drawn, and every message the model was sent and answered — **including the text of any file it read**. The store is on this machine, in `~/.praxis`, which `praxis-fs` will not read. "New" in the Canvas starts another conversation and keeps the old; "Delete…" removes the current one (`POST /forget`) and compacts the database so its text is gone from the file. The audit log keeps its records, which hold no prompt text or file contents. Nothing expires old conversations on its own yet.
+
+## The kill switch
+
+`POST /stop` ends every turn the agent is working on, in every conversation: each model call is cut off and recorded as cancelled. The Canvas sends it when you press Esc or its Stop button while the agent works.
 
 The model is shown the last ten turns of a conversation: the latest in full, so it can refer to what it just found, and the earlier ones as request and reply only. When the screen shows a file or folder, the request goes to the model with a note saying which, so "summarise this" works.
 

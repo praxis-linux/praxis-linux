@@ -32,10 +32,10 @@ This document is the single source of truth for project progress. Every status u
 - [x] **M0.9** — Conversation mode functional (chat, streaming, memory) — conversations stored locally; long-term vector memory not started
 - [ ] **M0.10** — File mode functional (browse ✅, preview: text only so far, search via intent ✅)
 - [ ] **M0.11** — Code mode functional (open, edit, run a file with CodeMirror)
-- [ ] **M0.12** — Privacy guardrails: audit log ✅, cloud-call toast, kill switch hotkey
+- [x] **M0.12** — Privacy guardrails: audit log, cloud-call toast, kill switch hotkey (Esc, in the Canvas window; a system-wide hotkey comes with the Phase 1 session), deleting a conversation
 - [ ] **M0.13** — 90-second demo video published; pre-launch post drafted
 
-**Phase 0 progress: 7 / 13 milestones complete (~54%).**
+**Phase 0 progress: 8 / 13 milestones complete (~62%).**
 
 ---
 

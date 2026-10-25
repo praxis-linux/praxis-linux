@@ -14,7 +14,9 @@ Scaffolded at **M0.5**, connected to the agent at **M0.6**, conversational since
 - Files and folders the agent shows are rows you can click: a folder opens its listing, a file its text. Those clicks never go through a model.
 - While the agent works, a status line says what it is doing, and the reply is drawn as the model writes it.
 - The context rail shows the conversation so far. Clicking a turn shows its screen again.
-- The conversation id is kept in `localStorage`, so a reload picks up where the conversation left off. "New" starts another conversation.
+- The conversation id is kept in `localStorage`, so a reload picks up where the conversation left off. "New" starts another conversation; "Delete…" asks, then deletes this one.
+- **Esc stops the agent** while it works (the send button turns into a Stop button meanwhile). This is the kill switch: the turn is dropped and the agent ends every turn it has in progress.
+- Every request that goes to a cloud model is announced with a notice, and marked ☁ in the intent bar.
 - The welcome screen is rendered locally, so the Canvas opens without the agent.
 - Links and images in the agent's text are shown as text: a link as its words and address, an image as its description. Nothing the agent writes can load a remote resource or take the window elsewhere.
 - If the agent sends a screen the Canvas rejects, the previous screen stays and the rest of that reply is not drawn.

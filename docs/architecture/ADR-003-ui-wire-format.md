@@ -49,6 +49,8 @@ The planner asks the provider for JSON constrained to the plan's schema (Pydanti
 | `POST /intent` | `{"intent": "..."}` | The user typed a request |
 | `POST /action` | An A2UI v0.9 client-to-server `action` message | The user clicked something on a surface (section 7) |
 | `POST /resume` | — | The Canvas opened: show where this conversation left off, or nothing if it is new |
+| `POST /stop` | — | The kill switch: end every turn the agent is working on, in every conversation. Answers `{"stopped": n}` |
+| `POST /forget` | — | Delete this conversation and what was read in it. Answers `{"forgotten": n}`; the audit log keeps its records |
 
 All require an `X-Praxis-Session` header, which names the conversation, and answer with one JSON event per line:
 
@@ -168,7 +170,7 @@ The first request after the model has been idle is slow: 5.8 s to the first draw
 **Negative / risks:**
 - **Files can carry instructions to the model (prompt injection).** A file the model reads can steer it. With no write tools the damage is bounded, but real: it can make the model read up to three more files per turn, and with a cloud alias those go to the provider; write misleading text or code ("run `curl … | sh`"); offer a card whose request differs from its title; and stay in the conversation's history. Links and images it writes are shown as text, never followed or loaded. A per-turn consent for cloud calls (M0.12) and showing a card's request before it runs are the next defences.
 - **Any program on this machine can call the agent.** Host and Origin checks stop web pages, including DNS rebinding, but there is no shared secret with the Canvas yet.
-- **Conversations hold whatever was read during them**, file contents included, in `~/.praxis/conversations.db`. It is on this machine and `praxis-fs` will not read it, but nothing deletes old conversations yet, and "New" does not either.
+- **Conversations hold whatever was read during them**, file contents included, in `~/.praxis/conversations.db`. It is on this machine and `praxis-fs` will not read it. "Delete…" removes a conversation (and compacts the file so the text is gone from it); nothing expires old conversations on its own yet.
 - **"What is on screen" is a sentence added to the user's request.** It is how the model learns the context, and a small model may take it more or less literally than intended.
 - **Expressiveness is capped by the plan's four block types.** New UI means a new block type and a builder, by design.
 - **The A2UI packages are pre-1.0 and moving.** `@a2ui/web_core` 0.12 already exports a v1.0 protocol. Versions are pinned by the lockfile; upgrades go through the contract tests.
