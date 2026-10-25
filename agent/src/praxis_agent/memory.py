@@ -107,6 +107,15 @@ class Conversations:
             ).fetchone()
             return n
 
+    def forget(self, session_id: str) -> int:
+        """Delete a conversation: every turn, with what was read in it. Returns how many turns."""
+        with closing(self._connect()) as db, db:
+            deleted = db.execute("DELETE FROM turns WHERE session_id = ?", (session_id,)).rowcount
+        # Deleted rows linger in the file's free pages until it is rewritten.
+        with closing(self._connect()) as db:
+            db.execute("VACUUM")
+        return deleted
+
     def turns(self, session_id: str) -> list[TurnSummary]:
         with closing(self._connect()) as db:
             rows = db.execute(

@@ -1,5 +1,8 @@
+import asyncio
 import json
 import sqlite3
+import threading
+import time
 from contextlib import asynccontextmanager
 
 import pytest
@@ -45,6 +48,8 @@ class FakeModel:
         self.aliases = []
         self.script = []
         self.fail = False
+        # While set, the model stops after its first chunk and waits, like a slow model.
+        self.stall = False
 
     def for_alias(self, alias):
         self.aliases.append(alias)
@@ -57,6 +62,8 @@ class FakeModel:
         answer = json.dumps(self.script.pop(0) if self.script else REPLY)
         for i in range(0, len(answer), 9):
             yield answer[i : i + 9]
+            while self.stall:
+                await asyncio.sleep(0.01)
 
     def prompt(self, index=-1):
         return self.requests[index][-1].parts[-1].content
@@ -821,6 +828,68 @@ def test_requests_too_long_for_a_model_are_refused_whatever_carries_them(client,
 
     assert (typed.status_code, clicked.status_code, submitted.status_code) == (422, 413, 413)
     assert model.requests == []
+
+
+# --- the kill switch and forgetting ------------------------------------------------
+
+
+def test_the_kill_switch_ends_a_turn_in_progress(client, model, audit, memory):
+    model.stall = True
+    outcome = {}
+
+    def ask_in_background():
+        try:
+            outcome["response"] = ask(client, "write me a long essay")
+        except Exception as error:  # the stream may be cut mid-response
+            outcome["error"] = error
+
+    asking = threading.Thread(target=ask_in_background)
+    asking.start()
+    deadline = time.monotonic() + 5
+    while not model.requests and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    stopped = client.post("/stop", headers=SESSION)
+    asking.join(timeout=5)
+
+    assert stopped.json() == {"stopped": 1}
+    assert not asking.is_alive()
+    (row,) = rows(audit, "model_calls")
+    assert row["status"] == "cancelled"
+    assert memory.turns("test-session") == []
+    # The agent keeps working afterwards.
+    model.stall = False
+    assert workspace(ask(client, "hello again"))["title"]["text"] == SAMPLE_REPLY.title
+
+
+def test_the_kill_switch_with_nothing_running_stops_nothing(client):
+    assert client.post("/stop", headers=SESSION).json() == {"stopped": 0}
+
+
+def test_forgetting_a_conversation_deletes_it_and_only_it(client, model, memory, audit):
+    ask(client, "first")
+    ask(client, "second")
+    ask(client, "other", session={"X-Praxis-Session": "another-one"})
+
+    forgotten = client.post("/forget", headers=SESSION)
+
+    assert forgotten.json() == {"forgotten": 2}
+    assert memory.turns("test-session") == []
+    assert client.post("/resume", headers=SESSION).text == ""
+    assert len(memory.turns("another-one")) == 1
+    # The audit log keeps its records of what happened.
+    assert len(rows(audit, "model_calls")) == 3
+    # The next turn starts a fresh history.
+    ask(client, "third")
+    assert len(model.requests[-1]) == 1
+
+
+def test_forgotten_text_is_gone_from_the_file(client, model, memory):
+    ask(client, "my secret project is called NIGHTJAR")
+
+    client.post("/forget", headers=SESSION)
+
+    assert b"NIGHTJAR" not in memory.path.read_bytes()
 
 
 # --- when the file service fails ----------------------------------------------

@@ -9,6 +9,7 @@ Every endpoint but /health answers with newline-delimited JSON, one event per li
     {"type": "error",  "message": "..."}
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -169,6 +170,8 @@ def create_app(
     tools: dict[str, FileTools] = {}
     # What each session's user is looking at: the file or folder on screen, if any.
     viewing: dict[str, str | None] = {}
+    # Turns being worked on right now, so the kill switch can stop every one of them.
+    running: set[asyncio.Task[Any]] = set()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -236,6 +239,19 @@ def create_app(
         return result
 
     async def turn(session_id: str, prompt: str, label: str, purpose: str) -> AsyncIterator[str]:
+        """A model turn, which the kill switch (POST /stop) can end at any point."""
+        task = asyncio.current_task()
+        if task is not None:
+            running.add(task)
+        try:
+            async for line in model_turn(session_id, prompt, label, purpose):
+                yield line
+        finally:
+            running.discard(task)  # type: ignore[arg-type]
+
+    async def model_turn(
+        session_id: str, prompt: str, label: str, purpose: str
+    ) -> AsyncIterator[str]:
         looking_at = viewing.get(session_id)
         if looking_at:
             prompt = f"{prompt}\n\n(On the user's screen right now: {looking_at}.)"
@@ -380,6 +396,27 @@ def create_app(
     @app.post("/resume")
     def resume_session(session_id: Annotated[str, Depends(session)]) -> StreamingResponse:
         return stream(resume(session_id))
+
+    @app.post("/stop")
+    def stop(session_id: Annotated[str, Depends(session)]) -> dict[str, int]:
+        """The kill switch: end every turn the agent is working on, in every conversation.
+
+        Each one's model call is cut off and recorded in the audit log as cancelled.
+        """
+        stopping = list(running)
+        for task in stopping:
+            task.cancel()
+        log.warning("kill switch: stopped %d turn(s), asked by %s", len(stopping), session_id)
+        return {"stopped": len(stopping)}
+
+    @app.post("/forget")
+    def forget(session_id: Annotated[str, Depends(session)]) -> dict[str, int]:
+        """Delete this conversation: its turns, and what was read during them.
+
+        The audit log keeps its records, which hold no prompt text or file contents.
+        """
+        viewing.pop(session_id, None)
+        return {"forgotten": memory.forget(session_id)}
 
     return app
 
