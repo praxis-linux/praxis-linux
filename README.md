@@ -46,6 +46,8 @@ Ctrl+C stops everything. To run the pieces yourself, see [`agent/README.md`](age
 
 Type an intent in the bar at the bottom — try "what is in my Documents folder?". The agent answers from a local model. It can look at the files in your home folder, hidden ones excepted, and cannot change any of them.
 
+To use a cloud model instead, set `ANTHROPIC_API_KEY` and add `--model cloud-fast` (Claude Haiku) or `--model cloud-strong` (Claude Opus). The file names and contents the agent looks at then go to Anthropic, and the Canvas says so before each request.
+
 ## Architecture in one diagram
 
 ```

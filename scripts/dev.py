@@ -39,6 +39,13 @@ def main() -> int:
     if missing:
         print(f"Not found on PATH: {', '.join(missing)}. See the README quickstart.")
         return 1
+    if not args.web and not shutil.which("cargo"):
+        print(
+            "The desktop window needs Rust (cargo), which is not on PATH. Run with --web to\n"
+            "use the Canvas in a browser instead, or install the Tauri prerequisites:\n"
+            "https://tauri.app/start/prerequisites/"
+        )
+        return 1
     check_ollama()
 
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYDANTIC_AI_NO_BANNER="1")
