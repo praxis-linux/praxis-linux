@@ -64,7 +64,7 @@ All require an `X-Praxis-Session` header, which names the conversation, and answ
 
 `workspace` holds the screen for the current turn. `context`, shown in the context rail, holds the conversation trail: one row per turn, the one on screen marked.
 
-The first drawing of a screen replaces the surface (`deleteSurface`, `createSurface`, `updateComponents`, and `updateDataModel` when there is a form). Deleting a surface that does not exist is a no-op, so the agent does not track what the Canvas is showing. While a reply streams in (section 10), later drawings send only `updateComponents`, so the screen grows without flicker, unless that would leave a component unreachable from the root, which the Canvas rejects; then the surface is replaced again. The data model is re-sent only when it changes, so streaming never wipes what the user has typed into a form.
+The first drawing of a screen replaces the surface (`deleteSurface`, `createSurface`, `updateComponents`, and `updateDataModel` when there is a form). Deleting a surface that does not exist is a no-op, so the agent does not track what the Canvas is showing. While a reply streams in (section 10), later drawings send only `updateComponents`, so the screen grows without flicker, unless that would leave a component unreachable from the root, which the Canvas rejects; then the surface is replaced again. In place, only the forms that are new are sent, each at its own path (`/b1`), so streaming never wipes what the user has typed into a form.
 
 Component ids are stable for that reason: the model's blocks are `b0`, `b1`, …, and what was looked up is `f0`, `f1`, …, so a listing keeps its id while the reply around it is still being written.
 
@@ -166,6 +166,8 @@ The first request after the model has been idle is slow: 5.8 s to the first draw
 - The contract is tested from both sides: the agent's builders write a golden file, and the Canvas tests feed that file to the real renderer.
 
 **Negative / risks:**
+- **Files can carry instructions to the model (prompt injection).** A file the model reads can steer it. With no write tools the damage is bounded, but real: it can make the model read up to three more files per turn, and with a cloud alias those go to the provider; write misleading text or code ("run `curl … | sh`"); offer a card whose request differs from its title; and stay in the conversation's history. Links and images it writes are shown as text, never followed or loaded. A per-turn consent for cloud calls (M0.12) and showing a card's request before it runs are the next defences.
+- **Any program on this machine can call the agent.** Host and Origin checks stop web pages, including DNS rebinding, but there is no shared secret with the Canvas yet.
 - **Conversations hold whatever was read during them**, file contents included, in `~/.praxis/conversations.db`. It is on this machine and `praxis-fs` will not read it, but nothing deletes old conversations yet, and "New" does not either.
 - **"What is on screen" is a sentence added to the user's request.** It is how the model learns the context, and a small model may take it more or less literally than intended.
 - **Expressiveness is capped by the plan's four block types.** New UI means a new block type and a builder, by design.
