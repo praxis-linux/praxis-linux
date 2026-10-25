@@ -54,7 +54,7 @@ The planner asks the provider for JSON constrained to the plan's schema (Pydanti
 | `POST /stop` | — | The kill switch: end every turn the agent is working on, in every conversation. Answers `{"stopped": n}` |
 | `POST /forget` | — | Delete this conversation and what was read in it. Answers `{"forgotten": n}`; the audit log keeps its records |
 
-All require an `X-Praxis-Session` header, which names the conversation, and answer with one JSON event per line:
+All require an `X-Praxis-Session` header, which names the conversation, and, when the agent was started with a token, an `X-Praxis-Token` header carrying it (HTTP 401 otherwise). They answer with one JSON event per line:
 
 | Event | Payload | When |
 |---|---|---|
@@ -204,7 +204,7 @@ In the browser run, the user typed a line into the file, saved it, then asked fo
 **Negative / risks:**
 - **Files can carry instructions to the model (prompt injection).** A file the model reads can steer it: make it read up to three more files per turn, and with a cloud alias those go to the provider; write misleading text or code ("run `curl … | sh`"); offer a card whose request differs from its title; propose a harmful change to a file; and stay in the conversation's history. Links and images it writes are shown as text, never followed or loaded. A proposed change is only a diff until the user applies it, and can be undone; but a user who applies without reading the diff, then presses Run, runs what the model wrote. The sandbox bounds that run (no network, nothing of the user's changed, 10 seconds) but does not yet limit memory or the number of processes. What a run prints goes into the next prompt, so with a cloud alias it reaches the provider. A per-turn consent for cloud calls and showing a card's request before it runs are the next defences.
 - **Running code is Linux-only and needs bubblewrap.** Where bubblewrap cannot make user namespaces (some hardened kernels, Ubuntu's AppArmor restriction for programs without a profile), there is no Run button and the reason is logged.
-- **Any program on this machine can call the agent.** Host and Origin checks stop web pages, including DNS rebinding, but there is no shared secret with the Canvas yet.
+- **The token is only as private as where it is kept.** Host and Origin checks stop web pages, including DNS rebinding. Other programs on the machine are stopped by `PRAXIS_AGENT_TOKEN`, which the packaged app makes for each start and keeps in its own window; `scripts/dev.py` makes one too, but in browser mode it sits in the page the dev server serves. An agent started by hand without the variable answers anyone on the machine.
 - **Conversations hold whatever was read during them**, file contents included, in `~/.praxis/conversations.db`. It is on this machine and `praxis-fs` will not read it. "Delete…" removes a conversation (and compacts the file so the text is gone from it); nothing expires old conversations on its own yet.
 - **"What is on screen" is a sentence added to the user's request.** It is how the model learns the context, and a small model may take it more or less literally than intended.
 - **Expressiveness is capped by the plan's four block types**, plus the screens the agent builds itself (listings, files, images, the editor, proposed changes, run output). New UI means a new block type and a builder, by design.

@@ -59,6 +59,8 @@ export interface AgentClient {
   stop(sessionId: string): Promise<void>;
   /** Delete a conversation and what was read during it. */
   forget(sessionId: string): Promise<void>;
+  /** Resolves once the agent answers, or after a while if it does not. */
+  ready(): Promise<void>;
 }
 
 export const httpAgent: AgentClient = {
@@ -66,6 +68,7 @@ export const httpAgent: AgentClient = {
   resume: (sessionId, signal) => post("/resume", {}, sessionId, signal),
   stop: (sessionId) => command("/stop", sessionId),
   forget: (sessionId) => command("/forget", sessionId),
+  ready: () => (isTauri() ? agentUp() : Promise.resolve()),
   action: (sessionId, action, signal) => {
     const { name, surfaceId, sourceComponentId, timestamp, context } = action;
     const message = {
@@ -75,6 +78,23 @@ export const httpAgent: AgentClient = {
     return post("/action", message, sessionId, signal);
   },
 };
+
+// How long the desktop app waits for the agent it started, which waits for the model
+// proxy, which loads slowly the first time.
+const STARTUP_MS = 120_000;
+
+/** In the desktop app the agent starts with the window, and takes a few seconds. */
+async function agentUp(): Promise<void> {
+  const deadline = Date.now() + STARTUP_MS;
+  while (Date.now() < deadline) {
+    try {
+      if ((await fetch(AGENT_URL + "/health")).ok) return;
+    } catch {
+      // Not listening yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
 
 /** Why a request to the agent failed, in words fit to show the user. */
 export class AgentError extends Error {}

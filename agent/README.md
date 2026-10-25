@@ -81,11 +81,18 @@ curl -N -X POST http://127.0.0.1:7729/intent \
 | `PRAXIS_FS_ROOTS` | the home folder | Folders the agent may read, change and run files in — see [`praxis-fs`](../mcp-servers/praxis-fs/README.md) |
 | `PRAXIS_FS_BACKUPS` | `~/.praxis/backups` | Where every write keeps what it replaced, for Undo |
 | `PRAXIS_FS_COMMAND` | `python -m praxis_fs` | Command that starts the filesystem server |
+| `PRAXIS_AGENT_TOKEN` | unset | The secret every request must carry, when set — see [Who can talk to the agent](#who-can-talk-to-the-agent) |
 | `PRAXIS_RUN_COMMAND` | `python -m praxis_run` | Command that starts the code-running server — see [`praxis-run`](../mcp-servers/praxis-run/README.md) |
 
 ## Who can talk to the agent
 
-The agent listens on 127.0.0.1 only. It answers requests that name it as `127.0.0.1` or `localhost` and, if they carry an `Origin`, come from the Canvas. That stops a web page that points its own domain at this machine (DNS rebinding) from using the agent to read your files. It does not stop another program running on this machine as any user: there is no secret between the Canvas and the agent yet. That needs the desktop shell to start the agent and hand the Canvas a token.
+The agent listens on 127.0.0.1 only. It answers requests that name it as `127.0.0.1` or `localhost` and, if they carry an `Origin`, come from the Canvas. That stops a web page that points its own domain at this machine (DNS rebinding) from using the agent to read your files.
+
+Any program on this machine, run by any user, can still reach 127.0.0.1. So when `PRAXIS_AGENT_TOKEN` is set, every request but `/health` must carry it in `X-Praxis-Token`, and nothing else can read, write or run anything through the agent:
+
+- **The packaged app** starts the agent itself, with a new random token each time, and gives it only to its own window.
+- **`scripts/dev.py`** makes a new token each start for the agent and the Canvas. In the browser (`--web`) the token is in the page the dev server serves, which any program on this machine can fetch, so there it protects less.
+- **Started by hand**, without the variable, the agent asks for no token, as before.
 
 ## Files and the model
 

@@ -21,6 +21,7 @@ Scaffolded at **M0.5**, connected to the agent at **M0.6**, conversational since
 - The welcome screen is rendered locally, so the Canvas opens without the agent.
 - Links and images in the agent's text are shown as text: a link as its words and address, an image as its description. Nothing the agent writes can load a remote resource or take the window elsewhere.
 - If the agent sends a screen the Canvas rejects, the previous screen stays and the rest of that reply is not drawn.
+- **In the AppImage the Canvas starts its own agent** and model proxy, from a Python it carries, with a random token only the two of them know, and stops them when it closes (or dies). The window waits for the agent before resuming the conversation. See `scripts/build-appimage.sh`.
 
 The contract with the agent is specified in [ADR-003](../docs/architecture/ADR-003-ui-wire-format.md).
 
@@ -41,6 +42,7 @@ canvas/
 │   ├── layers/               # WorkspaceLayer, ContextRail, IntentLayer
 │   └── index.css             # Design tokens and A2UI theme
 └── src-tauri/                # Rust shell, window and CSP configuration
+    └── src/services.rs       # In the AppImage: starts the agent and the model proxy
 ```
 
 ## Setup
