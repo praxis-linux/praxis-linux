@@ -4,9 +4,14 @@ The vetted component catalog the Praxis agent renders onto the Canvas.
 
 ## Status
 
-The catalog that exists today lives in [`canvas/src/a2ui/catalog.tsx`](../canvas/src/a2ui/catalog.tsx): a vetted subset of the A2UI basic catalog (Text, Row, Column, List, Card, Tabs, Divider, Modal, Button, TextField, CheckBox, ChoicePicker, Slider, DateTimeInput). See [ADR-003](../docs/architecture/ADR-003-ui-wire-format.md).
+The catalog that exists today lives in [`canvas/src/a2ui/catalog.tsx`](../canvas/src/a2ui/catalog.tsx): a vetted subset of the A2UI basic catalog (Text, Row, Column, List, Card, Tabs, Divider, Modal, Button, TextField, CheckBox, ChoicePicker, Slider, DateTimeInput), and two components of Praxis's own:
 
-The Praxis-specific components below are planned, not built. They join the catalog as File mode (M0.10) and Code mode (M0.11) land — see [Roadmap](../docs/ROADMAP.md).
+- **FileImage** shows an image file from inline data only, so showing an image never fetches anything.
+- **CodeEditor** is a CodeMirror 6 editor bound to the A2UI data model: what the user types is what Save sends.
+
+Proposed changes are shown as diffs in a `praxis-diff` code block, which only the agent can produce. See [ADR-003](../docs/architecture/ADR-003-ui-wire-format.md).
+
+The components below are planned. `<CodeEditor>` is built, as above; `<FilePreview>` and `<DiffView>` exist in a simpler form (text and image previews; a unified diff in a code block).
 
 ## Design principle
 

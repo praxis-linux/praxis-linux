@@ -1,6 +1,6 @@
 # Pre-launch post (draft)
 
-*For a project blog post, Show HN, r/linux and the like. Replace the video link once it is recorded; check the numbers against the roadmap before posting.*
+*For a project blog post, Show HN, r/linux and the like. Check the numbers against the roadmap before posting, and make the video public first: it is unlisted.*
 
 ---
 
@@ -8,7 +8,7 @@
 
 Most "AI on the desktop" today is a sidebar: a chat window next to the apps you already use, which can talk about your work but not become it. Praxis tries the other shape. There is one surface, the Canvas. You say what you want, and it becomes what that needs: a file browser when you ask about files, an editor when you ask about code, a conversation when you just want to talk.
 
-[90-second demo video]
+▶ **[The 90-second demo](https://youtu.be/MgkO89fFu8c)**
 
 This is Phase 0, a spike: the Canvas runs as an app on an existing Linux (an AppImage, tested on Ubuntu 24.04 and Arch Linux). If it holds up, Phase 1 turns it into a bootable distribution.
 

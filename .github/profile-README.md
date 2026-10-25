@@ -6,11 +6,11 @@ We are building an AI-native operating system that rejects the chat sidebar. The
 
 The name is from the Greek *praxis* (πρᾶξις) — *action; the moment thought becomes deed*.
 
-**📜 [Manifesto](https://github.com/praxis-linux/praxis-linux/blob/main/MANIFESTO.md)** · **🗺️ [Roadmap](https://github.com/praxis-linux/praxis-linux/blob/main/docs/ROADMAP.md)** · **⭐ Star to follow along**
+**📜 [Manifesto](https://github.com/praxis-linux/praxis-linux/blob/main/MANIFESTO.md)** · **🗺️ [Roadmap](https://github.com/praxis-linux/praxis-linux/blob/main/docs/ROADMAP.md)** · **▶ [90-second demo](https://youtu.be/MgkO89fFu8c)** · **⭐ Star to follow along**
 
 ## Status
 
-**Phase 0 — Spike.** Building the Canvas as a Linux app first. Not yet runnable.
+**Phase 0 — Spike.** The Canvas runs as a Linux app: an AppImage, tested on Ubuntu and Arch, driven by a local model. Conversation, File and Code modes work; the agent proposes changes, you apply them, and every change can be undone. An ISO comes in Phase 1.
 
 ## Principles
 

@@ -13,6 +13,10 @@ We are in **Phase 0 — Spike**. The current goal is to prove the adaptive Canva
 
 Until we ship the M0.13 demo, the codebase will change shape often. Don't take it personally if something gets refactored away.
 
+## Getting set up
+
+The [README](README.md#develop-run-it-from-the-source) shows how to run Praxis from the source: `python scripts/dev.py` starts the model proxy, the agent and the Canvas. Each part has its own README with its tests. ADR-003 is the contract between the agent and the Canvas, and the place to start before changing either.
+
 ## How to propose something
 
 1. Check open [issues](../../issues) and [discussions](../../discussions) — your idea may already be there
@@ -26,9 +30,11 @@ Until we ship the M0.13 demo, the codebase will change shape often. Don't take i
 |---|---|---|
 | Rust (`canvas/src-tauri/`) | `clippy` | `rustfmt` |
 | TypeScript (`canvas/src/`) | `tsc` (eslint not set up yet) | not set up yet |
-| Python (`agent/`) | `ruff` | `ruff format` |
+| Python (`agent/`, `mcp-servers/*`) | `ruff` | `ruff format` |
 
-Run `make lint` and `make test` before pushing. CI runs the same checks on every pull request.
+Run `make lint` and `make test` before pushing (they need uv, pnpm and Rust). CI runs the same checks on every pull request, and builds the AppImage when the Tauri shell or the build script changes.
+
+Changes to what the agent may do to files, or to the sandbox, get the most scrutiny: say in the PR what a model or a file it reads could make the change do.
 
 ## Commits
 
@@ -36,7 +42,7 @@ Conventional Commits format: `feat(canvas): add file mode renderer`. The roadmap
 
 ## Code of Conduct
 
-By participating, you agree to uphold a basic standard of respectful, constructive collaboration. We will adopt the Contributor Covenant formally before Phase 1; in the meantime, treat people the way you would want to be treated when you submitted your first patch to an open project.
+By participating, you agree to uphold the [Code of Conduct](CODE_OF_CONDUCT.md), adapted from the Contributor Covenant 2.1.
 
 ## Security
 
