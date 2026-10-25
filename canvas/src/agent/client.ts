@@ -13,6 +13,7 @@ const AgentEventSchema = z.discriminatedUnion("type", [
     model: z.string(),
     destination: z.enum(["local", "cloud"]),
   }),
+  z.object({ type: z.literal("status"), text: z.string() }),
   z.object({ type: z.literal("mode"), mode: z.enum(MODES) }),
   z.object({ type: z.literal("a2ui"), message: A2uiMessageSchema }),
   z.object({ type: z.literal("error"), message: z.string() }),
@@ -22,10 +23,13 @@ export type AgentEvent = z.infer<typeof AgentEventSchema>;
 export interface AgentClient {
   intent(sessionId: string, intent: string, signal: AbortSignal): AsyncIterable<AgentEvent>;
   action(sessionId: string, action: ActionPayload, signal: AbortSignal): AsyncIterable<AgentEvent>;
+  /** Where a conversation left off: its last screen and its trail. Nothing if it is new. */
+  resume(sessionId: string, signal: AbortSignal): AsyncIterable<AgentEvent>;
 }
 
 export const httpAgent: AgentClient = {
   intent: (sessionId, intent, signal) => post("/intent", { intent }, sessionId, signal),
+  resume: (sessionId, signal) => post("/resume", {}, sessionId, signal),
   action: (sessionId, action, signal) => {
     const { name, surfaceId, sourceComponentId, timestamp, context } = action;
     const message = {

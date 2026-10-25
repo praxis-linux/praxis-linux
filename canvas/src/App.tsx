@@ -18,7 +18,12 @@ export default function App({ session: provided }: Props) {
     <MarkdownContext.Provider value={renderMarkdown}>
       <div className="canvas-root">
         <div className="canvas-main">
-          <WorkspaceLayer mode={state.mode} surface={state.workspace} error={state.error} />
+          <WorkspaceLayer
+            mode={state.mode}
+            surface={state.workspace}
+            status={state.busy ? state.status : null}
+            error={state.error}
+          />
           {state.context && <ContextRail surface={state.context} />}
         </div>
         <IntentLayer
@@ -26,6 +31,7 @@ export default function App({ session: provided }: Props) {
           call={state.call}
           busy={state.busy}
           onIntent={(intent) => session.sendIntent(intent)}
+          onNewConversation={() => session.newConversation()}
         />
       </div>
     </MarkdownContext.Provider>

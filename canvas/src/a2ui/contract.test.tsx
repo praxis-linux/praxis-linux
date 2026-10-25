@@ -4,9 +4,12 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 // Written by agent/tests/test_a2ui.py from the agent's own builders.
 import golden from "../../../agent/tests/golden/workspace_messages.json";
+import trailGolden from "../../../agent/tests/golden/trail_messages.json";
 import App from "../App";
 
 const GOLDEN: unknown[] = golden;
+// The trail of a two-turn conversation, the second turn on screen.
+const TRAIL: unknown[] = trailGolden;
 
 interface SentRequest {
   path: string;
@@ -14,18 +17,32 @@ interface SentRequest {
   body: any;
 }
 
+// Requests the user's actions caused, and the requests to resume made on start.
 let sent: SentRequest[];
+let resumes: SentRequest[];
 
-/** Stubs the agent: every request is answered with `events` as NDJSON. */
-function agentAnswers(events: unknown[]) {
+const ndjson = (events: unknown[]) =>
+  new Response(events.map((event) => JSON.stringify(event) + "\n").join(""));
+
+/**
+ * Stubs the agent: every request is answered with `events` as NDJSON, except
+ * resuming, which is answered with `resume`: by default, a conversation that is new.
+ */
+function agentAnswers(events: unknown[], { resume = [] as unknown[] } = {}) {
   sent = [];
+  resumes = [];
   vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
-    sent.push({
+    const request = {
       path: new URL(url).pathname,
       session: new Headers(init.headers).get("X-Praxis-Session"),
       body: JSON.parse(init.body as string),
-    });
-    return new Response(events.map((event) => JSON.stringify(event) + "\n").join(""));
+    };
+    if (request.path === "/resume") {
+      resumes.push(request);
+      return ndjson(resume);
+    }
+    sent.push(request);
+    return ndjson(events);
   });
 }
 
@@ -43,7 +60,10 @@ async function submitIntent(text: string) {
   fireEvent.keyDown(input, { key: "Enter" });
 }
 
-beforeEach(() => agentAnswers(GOLDEN_TURN));
+beforeEach(() => {
+  localStorage.clear();
+  agentAnswers(GOLDEN_TURN);
+});
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -55,6 +75,18 @@ test("shows the welcome screen without the agent", async () => {
   expect(await screen.findByText("Welcome to Praxis")).toBeTruthy();
   expect(screen.getByText("Browse your files")).toBeTruthy();
   expect(sent).toEqual([]);
+  await waitFor(() => expect(resumes).toHaveLength(1));
+});
+
+test("says nothing when the agent cannot be reached until the user asks for something", async () => {
+  vi.stubGlobal("fetch", async () => {
+    throw new TypeError("fetch failed");
+  });
+  render(<App />);
+
+  expect(await screen.findByText("Welcome to Praxis")).toBeTruthy();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(screen.queryByRole("alert")).toBeNull();
 });
 
 test("renders the agent's answer to an intent", async () => {
@@ -200,4 +232,93 @@ test("reports an agent that is not running", async () => {
   expect((await screen.findByRole("alert")).textContent).toContain("Could not reach the agent");
   // The screen the user was on is still there.
   expect(screen.getByText("Welcome to Praxis")).toBeTruthy();
+});
+
+// --- the conversation --------------------------------------------------------
+
+const RESUMED = [{ type: "mode", mode: "conversation" }, ...a2ui(GOLDEN), ...a2ui(TRAIL)];
+
+test("picks up where the conversation left off", async () => {
+  agentAnswers(GOLDEN_TURN, { resume: RESUMED });
+  render(<App />);
+
+  expect(await screen.findByText("Plan a project")).toBeTruthy();
+  expect(screen.queryByText("Welcome to Praxis")).toBeNull();
+  expect(screen.getByText("This conversation")).toBeTruthy();
+  expect(screen.getByText("▸ show my notes")).toBeTruthy();
+  expect(sent).toEqual([]);
+});
+
+test("a reload continues the same conversation", async () => {
+  render(<App />);
+  await waitFor(() => expect(resumes).toHaveLength(1));
+  const conversation = resumes[0].session;
+  cleanup();
+
+  render(<App />);
+  await waitFor(() => expect(resumes).toHaveLength(2));
+  await submitIntent("hello again");
+
+  await waitFor(() => expect(sent).toHaveLength(1));
+  expect(conversation).toMatch(/^[0-9a-f-]{36}$/);
+  expect(resumes[1].session).toBe(conversation);
+  expect(sent[0].session).toBe(conversation);
+});
+
+test("clicking a turn in the trail asks the agent to show it again", async () => {
+  agentAnswers(GOLDEN_TURN, { resume: RESUMED });
+  render(<App />);
+
+  fireEvent.click(await screen.findByText("plan a project"));
+
+  await waitFor(() => expect(sent).toHaveLength(1));
+  expect(sent[0].path).toBe("/action");
+  expect(sent[0].body.action).toMatchObject({ name: "revisit", context: { turn: 1 } });
+});
+
+test("a new conversation starts from the welcome screen with a new id", async () => {
+  agentAnswers(GOLDEN_TURN, { resume: RESUMED });
+  render(<App />);
+  await screen.findByText("This conversation");
+  const old = resumes[0].session;
+
+  fireEvent.click(screen.getByText("New"));
+
+  expect(await screen.findByText("Welcome to Praxis")).toBeTruthy();
+  expect(screen.queryByText("This conversation")).toBeNull();
+  await submitIntent("fresh start");
+  await waitFor(() => expect(sent).toHaveLength(1));
+  expect(sent[0].session).not.toBe(old);
+  expect(localStorage.getItem("praxis.conversation")).toBe(sent[0].session);
+});
+
+test("says what the agent is doing while it looks things up", async () => {
+  let push!: (event: unknown) => void;
+  let end!: () => void;
+  agentAnswers([]);
+  vi.stubGlobal("fetch", async (url: string) => {
+    if (new URL(url).pathname === "/resume") return ndjson([]);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder();
+        push = (event) => controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
+        end = () => controller.close();
+      },
+    });
+    return new Response(body);
+  });
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+
+  await submitIntent("find my python files");
+  await waitFor(() => expect(push).toBeDefined());
+  push({ type: "call", model: "local-fast", destination: "local" });
+  push({ type: "status", text: "Searching for *.py…" });
+
+  expect(await screen.findByText("Searching for *.py…")).toBeTruthy();
+  GOLDEN_TURN.slice(1).forEach(push);
+  end();
+
+  expect(await screen.findByText("Plan a project")).toBeTruthy();
+  await waitFor(() => expect(screen.getByRole("status").textContent).toBe(""));
 });

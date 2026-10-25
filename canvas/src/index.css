@@ -72,6 +72,13 @@ html, body, #root {
   opacity: 0.7;
 }
 
+.workspace-status {
+  min-height: 18px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.workspace-status:empty { display: none; }
+
 .workspace-error {
   max-width: 640px;
   padding: 10px 14px;
@@ -92,6 +99,18 @@ html, body, #root {
   min-height: 56px;
   flex-shrink: 0;
 }
+
+.intent-new {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.intent-new:hover { color: var(--text-primary); border-color: var(--accent-dim); }
 
 .mode-badge {
   font-size: 11px;

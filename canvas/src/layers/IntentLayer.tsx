@@ -7,9 +7,10 @@ interface Props {
   call: CanvasState["call"];
   busy: boolean;
   onIntent: (intent: string) => void;
+  onNewConversation: () => void;
 }
 
-export default function IntentLayer({ mode, call, busy, onIntent }: Props) {
+export default function IntentLayer({ mode, call, busy, onIntent, onNewConversation }: Props) {
   const [value, setValue] = useState("");
 
   function submit() {
@@ -29,6 +30,13 @@ export default function IntentLayer({ mode, call, busy, onIntent }: Props) {
 
   return (
     <div className="intent-layer">
+      <button
+        className="intent-new"
+        onClick={onNewConversation}
+        title="Start a new conversation. This one is kept."
+      >
+        New
+      </button>
       <span className="mode-badge">{mode}</span>
       {call && (
         <span
