@@ -36,6 +36,7 @@ async def test_every_tool_is_declared_read_only(client):
         "list_directory",
         "search_files",
         "read_text_file",
+        "read_image",
     }
     assert all(tool.annotations.read_only_hint for tool in tools)
 

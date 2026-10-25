@@ -1,3 +1,4 @@
+import base64
 import os
 import subprocess
 import time
@@ -328,3 +329,62 @@ def test_a_second_root_is_reachable_by_absolute_path(home, tmp_path):
     files = Files([home, tmp_path / "outside"])
 
     assert files.read_text_file(str(tmp_path / "outside" / "secret.txt")).content == "not yours"
+
+
+# --- images ----------------------------------------------------------------
+
+# The smallest valid PNG: one transparent pixel.
+PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+@pytest.mark.parametrize(
+    ("head", "media_type"),
+    [
+        (PNG, "image/png"),
+        (b"\xff\xd8\xff\xe0" + b"\0" * 20, "image/jpeg"),
+        (b"GIF89a" + b"\0" * 20, "image/gif"),
+        (b"RIFF\0\0\0\0WEBPVP8 " + b"\0" * 20, "image/webp"),
+    ],
+)
+def test_images_are_read_by_what_their_bytes_are(files, home, head, media_type):
+    (home / "picture.bin").write_bytes(head)
+
+    image = files.read_image("picture.bin")
+
+    assert image.media_type == media_type
+    assert base64.b64decode(image.data) == head
+    assert image.size == len(head)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+        b"hello, not an image",
+        b"",
+    ],
+)
+def test_anything_else_is_not_shown_as_an_image_whatever_its_name(files, home, content):
+    (home / "trick.png").write_bytes(content)
+
+    with pytest.raises(AccessError, match="not an image"):
+        files.read_image("trick.png")
+
+
+def test_images_follow_the_same_rules_as_text(files, home):
+    (home / ".secret.png").write_bytes(PNG)
+
+    with pytest.raises(AccessError, match="hidden"):
+        files.read_image(".secret.png")
+    with pytest.raises(AccessError, match="outside"):
+        files.read_image("../outside/secret.txt")
+
+
+def test_very_large_images_are_not_read(files, home, monkeypatch):
+    (home / "big.png").write_bytes(PNG)
+    monkeypatch.setattr(fs, "MAX_IMAGE_BYTES", 10)
+
+    with pytest.raises(AccessError, match="too large"):
+        files.read_image("big.png")

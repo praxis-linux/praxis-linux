@@ -7,6 +7,7 @@ and Praxis's own `.praxis`, and on Windows anything with the hidden or system
 attribute, which covers `AppData`.
 """
 
+import base64
 import fnmatch
 import os
 import re
@@ -22,6 +23,7 @@ from pydantic import BaseModel
 MAX_ENTRIES = 200
 MAX_SCANNED = 50_000
 MAX_READ_BYTES = 64_000
+MAX_IMAGE_BYTES = 8_000_000
 SEARCH_SECONDS = 10.0
 MAX_DAYS = 36_500
 
@@ -60,6 +62,14 @@ class FileText(BaseModel):
     size: int
     content: str
     truncated: bool
+
+
+class ImageFile(BaseModel):
+    path: str
+    size: int
+    media_type: Literal["image/png", "image/jpeg", "image/gif", "image/webp"]
+    # The file's bytes, base64-encoded.
+    data: str
 
 
 def roots_from_env() -> list[Path]:
@@ -183,6 +193,28 @@ class Files:
             truncated=size > limit,
         )
 
+    def read_image(self, path: str) -> ImageFile:
+        """An image file's bytes, for showing it. Only PNG, JPEG, GIF and WebP, judged by
+        the bytes themselves, not the file's name; never SVG, which can carry script."""
+        file = self.resolve(path)
+        if file.is_dir():
+            raise AccessError(f"{path} is a folder, not a file.")
+        if not file.is_file():
+            raise AccessError(f"There is no file at {path}.")
+        size = file.stat().st_size
+        if size > MAX_IMAGE_BYTES:
+            raise AccessError(f"{path} is too large to show ({size // 1_000_000} MB).")
+        data = file.read_bytes()
+        media_type = _image_type(data[:16])
+        if media_type is None:
+            raise AccessError(f"{path} is not an image Praxis can show.")
+        return ImageFile(
+            path=str(file),
+            size=size,
+            media_type=media_type,
+            data=base64.b64encode(data).decode("ascii"),
+        )
+
     def _directory(self, path: str) -> Path:
         directory = self.resolve(path)
         if not directory.exists():
@@ -240,6 +272,18 @@ def _globs(pattern: str) -> list[str]:
         else:
             globs.append(f"*{part}*")
     return globs or ["*"]
+
+
+def _image_type(head: bytes) -> str | None:
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 def _hidden(name: str) -> bool:

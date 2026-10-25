@@ -10,6 +10,7 @@ The Praxis filesystem MCP server. Read-only: it can list a folder, find files by
 | `list_directory` | `path` | What is directly inside one folder, folders first. |
 | `search_files` | `pattern`, `directory`, `modified_within_days` | Files under a folder at any depth whose name matches, newest first. |
 | `read_text_file` | `path`, `max_bytes` | The text of one file, cut off at `max_bytes` (at most 64,000). |
+| `read_image` | `path` | A PNG, JPEG, GIF or WebP image, base64-encoded, up to 8 MB. Judged by the file's bytes, not its name; SVG is never read as an image, since it can carry script. |
 
 Paths may be absolute, start with `~`, or be relative to the main folder. An empty path is the main folder.
 

@@ -8,7 +8,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from .fs import AccessError, Files, FileText, Listing, Refused, roots_from_env
+from .fs import AccessError, Files, FileText, ImageFile, Listing, Refused, roots_from_env
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 
@@ -64,6 +64,12 @@ def build_server(files: Files) -> MCPServer:
         """Read a text file. Long files are cut off at `max_bytes`."""
         with _refusals_reach_the_client():
             return files.read_text_file(path, max_bytes)
+
+    @server.tool(annotations=READ_ONLY)
+    def read_image(path: str) -> ImageFile:
+        """Read a PNG, JPEG, GIF or WebP image, base64-encoded, to show it."""
+        with _refusals_reach_the_client():
+            return files.read_image(path)
 
     return server
 
