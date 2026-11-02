@@ -76,6 +76,31 @@ class Undone(BaseModel):
     removed: bool
 
 
+class WriteRecord(BaseModel):
+    backup: str
+    path: str
+    at: datetime
+    created: bool
+    # "save" or "apply"; empty on records from before this was kept.
+    origin: str
+    # The model that proposed the text, when one did.
+    proposed_by: str | None
+    undone: bool
+    undoable: bool
+
+
+class WriteHistory(BaseModel):
+    writes: list[WriteRecord]
+
+
+class WriteDetails(BaseModel):
+    record: WriteRecord
+    # None when the write created the file.
+    original: str | None
+    # None on records from before this was kept.
+    written: str | None
+
+
 # --- Lookups the model can ask for. `do` comes first so it commits to one. ---
 
 
@@ -174,12 +199,18 @@ class WriteFile(BaseModel):
     content: str
     # The hash of the file being changed; None to create a new file.
     expected_sha256: str | None
+    # What asked for the write: "save", the user's own text, or "apply", a model's.
+    origin: Literal["save", "apply"]
+    # The model that proposed the text, for "apply".
+    proposed_by: str | None = None
 
     def call(self) -> tuple[str, dict[str, Any]]:
         return "write_text_file", {
             "path": self.path,
             "content": self.content,
             "expected_sha256": self.expected_sha256,
+            "origin": self.origin,
+            "proposed_by": self.proposed_by,
         }
 
     def audited(self) -> dict[str, Any]:
@@ -188,6 +219,8 @@ class WriteFile(BaseModel):
             "path": self.path,
             "chars": len(self.content),
             "expected_sha256": self.expected_sha256,
+            "origin": self.origin,
+            "proposed_by": self.proposed_by,
         }
 
 
@@ -195,8 +228,8 @@ class UndoWrite(BaseModel):
     failed: ClassVar[str] = "nothing was changed"
 
     backup: str
-    # The file the write changed, when the agent knows it: recorded in the audit log.
-    path: str | None = None
+    # The file the write changed, recorded in the audit log before the undo happens.
+    path: str
 
     def call(self) -> tuple[str, dict[str, Any]]:
         return "undo_write", {"backup": self.backup}
@@ -205,7 +238,23 @@ class UndoWrite(BaseModel):
         return {"backup": self.backup, "path": self.path}
 
 
-FileRequest = Lookup | OpenForEditing | WriteFile | UndoWrite
+class RecentWrites(BaseModel):
+    """The writes on record, for the user's Changes screen. The model never sees them."""
+
+    def call(self) -> tuple[str, dict[str, Any]]:
+        return "recent_writes", {}
+
+
+class ChangeDetails(BaseModel):
+    """One write's text before and after. The model never sees it."""
+
+    backup: str
+
+    def call(self) -> tuple[str, dict[str, Any]]:
+        return "write_details", {"backup": self.backup}
+
+
+FileRequest = Lookup | OpenForEditing | WriteFile | UndoWrite | RecentWrites | ChangeDetails
 
 # The file names a click opens as an image rather than as text. praxis-fs checks
 # the bytes; this only picks which tool to ask.
@@ -234,7 +283,9 @@ class FileTools:
         tools.roots = (await tools._call("allowed_folders", {}))["result"]
         return tools
 
-    async def run(self, request: FileRequest) -> Listing | FileText | ImageFile | Written | Undone:
+    async def run(
+        self, request: FileRequest
+    ) -> Listing | FileText | ImageFile | Written | Undone | WriteHistory | WriteDetails:
         tool, arguments = request.call()
         result = await self._call(tool, arguments)
         kind = {
@@ -242,6 +293,8 @@ class FileTools:
             "read_image": ImageFile,
             "write_text_file": Written,
             "undo_write": Undone,
+            "recent_writes": WriteHistory,
+            "write_details": WriteDetails,
         }.get(tool, Listing)
         return kind.model_validate(result)
 

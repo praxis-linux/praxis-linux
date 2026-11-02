@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     -- 'model' when the model asked for it, 'user' when the user clicked.
     asked_by     TEXT NOT NULL CHECK (asked_by IN ('model', 'user')),
     status       TEXT NOT NULL DEFAULT 'started',
-    error        TEXT
+    error        TEXT,
+    -- What the call did, without any file's text: a write's new hash and backup id.
+    result       TEXT
 );
 """
 
@@ -50,6 +52,10 @@ class AuditLog:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as db, db:
             db.executescript(_SCHEMA)
+            # A log from before tool_calls had this column.
+            columns = {row[1] for row in db.execute("PRAGMA table_info(tool_calls)")}
+            if "result" not in columns:
+                db.execute("ALTER TABLE tool_calls ADD COLUMN result TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path)
@@ -92,12 +98,18 @@ class AuditLog:
         )
 
     def finish_tool(
-        self, call_id: int, *, error: str | None = None, status: str | None = None
+        self,
+        call_id: int,
+        *,
+        error: str | None = None,
+        status: str | None = None,
+        result: dict[str, Any] | None = None,
     ) -> None:
+        outcome = None if result is None else json.dumps(result, ensure_ascii=False)
         with closing(self._connect()) as db, db:
             db.execute(
-                "UPDATE tool_calls SET status = ?, error = ? WHERE id = ?",
-                (status or ("error" if error else "ok"), error, call_id),
+                "UPDATE tool_calls SET status = ?, error = ?, result = ? WHERE id = ?",
+                (status or ("error" if error else "ok"), error, outcome, call_id),
             )
 
     def _insert(self, statement: str, values: tuple[Any, ...]) -> int:

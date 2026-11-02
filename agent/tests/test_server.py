@@ -1565,3 +1565,140 @@ def test_a_proposal_fenced_like_a_reply_is_unwrapped(client, model, home):
     act(client, apply["name"], apply["context"])
 
     assert (home / "app.py").read_bytes() == b"print('bye')\n"
+
+
+# --- What the audit log and the Changes screen can tell ------------------------
+
+
+def tool_rows(audit, tool):
+    return [r for r in rows(audit, "tool_calls") if r["tool"] == tool]
+
+
+def save_something(client, home, text="x\n"):
+    opened = act(client, "edit", {"target": str(home / "app.py")})
+    return act(client, "save", save_context(opened, text))
+
+
+def test_the_audit_log_tells_a_save_from_an_applied_proposal(client, model, audit, home):
+    save_something(client, home)
+    model.script = [propose("docs/new.py", "x = 1\n")]
+    apply = workspace(ask(client, "add a file"))["f0_apply"]["action"]["event"]
+    act(client, apply["name"], apply["context"])
+
+    saved, applied = [json.loads(r["arguments"]) for r in tool_rows(audit, "write_text_file")]
+
+    assert (saved["origin"], saved["proposed_by"]) == ("save", None)
+    assert (applied["origin"], applied["proposed_by"]) == ("apply", "local-fast")
+
+
+def test_the_audit_log_ties_a_write_to_its_new_hash_and_its_backup(client, audit, home, tmp_path):
+    save_something(client, home)
+
+    (write,) = tool_rows(audit, "write_text_file")
+    outcome = json.loads(write["result"])
+
+    assert outcome["size"] == 2
+    assert (tmp_path / "backups" / outcome["backup"] / "original").read_bytes() == b"print('hi')\n"
+    assert len(outcome["sha256"]) == 64
+
+
+def test_the_audit_log_never_holds_a_files_text(client, model, audit, home):
+    secret = "print('a-very-recognisable-line')\n"
+    saved = save_something(client, home, secret)
+    undo = workspace(saved)["f0_undo"]["action"]["event"]
+    act(client, undo["name"], undo["context"])
+    act(client, "changes", {})
+
+    with sqlite3.connect(audit.path) as db:
+        dumped = "".join(str(row) for row in db.execute("SELECT * FROM tool_calls"))
+    assert "a-very-recognisable-line" not in dumped
+
+
+def test_an_undo_is_audited_with_its_file_even_after_a_restart(make_client, audit, home):
+    with make_client() as first:
+        saved = save_something(first, home)
+    undo = workspace(saved)["f0_undo"]["action"]["event"]
+
+    with make_client() as second:
+        undone = act(second, undo["name"], undo["context"])
+
+    assert errors(undone) == []
+    (row,) = tool_rows(audit, "undo_write")
+    assert json.loads(row["arguments"])["path"] == str(home / "app.py")
+    assert json.loads(row["result"]) == {"path": str(home / "app.py"), "removed": False}
+
+
+def test_an_older_audit_log_gains_the_new_column(tmp_path):
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "CREATE TABLE tool_calls (id INTEGER PRIMARY KEY, started_at TEXT NOT NULL,"
+            " session_id TEXT NOT NULL, tool TEXT NOT NULL, arguments TEXT NOT NULL,"
+            " asked_by TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'started', error TEXT)"
+        )
+
+    log = AuditLog(path)
+    call = log.begin_tool(session_id="s", tool="t", arguments={}, asked_by="user")
+    log.finish_tool(call, result={"a": 1})
+
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT result FROM tool_calls").fetchone() == ('{"a": 1}',)
+
+
+def test_the_changes_screen_lists_what_was_changed_without_a_model(client, model, home):
+    save_something(client, home)
+    requests = len(model.requests)
+
+    response = client.post("/changes", headers=SESSION)
+
+    components = workspace(response)
+    assert components["title"]["text"] == "Recent changes"
+    assert components["f0_w0_meta"]["text"].startswith("Saved by you")
+    assert components["f0_w0_undo"]["action"]["event"]["name"] == "undo"
+    assert len(model.requests) == requests
+
+
+def test_a_change_shows_its_diff_even_after_the_file_moved_on(client, home):
+    save_something(client, home, "print('bye')\n")
+    listed = workspace(client.post("/changes", headers=SESSION))
+    show = listed["f0_w0_show"]["action"]["event"]
+    (home / "app.py").write_bytes(b"edited by hand\n")
+
+    response = act(client, show["name"], show["context"])
+
+    components = workspace(response)
+    diff = components["f0_diff"]["text"]
+    assert "-print('hi')" in diff and "+print('bye')" in diff
+    assert "f0_undo" not in components
+    assert "cannot be undone" in components["f0_meta"]["text"]
+
+
+def test_a_change_can_be_undone_from_the_changes_screen_later_on(client, home):
+    save_something(client, home, "print('bye')\n")
+    act(client, "edit", {"target": str(home / "docs" / "plan.md")})
+    listed = workspace(client.post("/changes", headers=SESSION))
+    undo = listed["f0_w0_undo"]["action"]["event"]
+
+    undone = act(client, undo["name"], undo["context"])
+
+    assert errors(undone) == []
+    assert (home / "app.py").read_bytes() == b"print('hi')\n"
+    after = workspace(client.post("/changes", headers=SESSION))
+    assert "undone" in after["f0_w0_meta"]["text"]
+    assert "f0_w0_undo" not in after
+
+
+def test_the_model_is_not_told_what_the_changes_screen_shows(client, model, home):
+    save_something(client, home, "print('a-very-recognisable-line')\n")
+    listed = workspace(client.post("/changes", headers=SESSION))
+    show = listed["f0_w0_show"]["action"]["event"]
+    act(client, show["name"], show["context"])
+
+    ask(client, "what is on screen?")
+
+    assert "On the user's screen" not in model.prompt()
+    assert "a-very-recognisable-line" not in model.prompt()
+
+
+def test_the_changes_endpoint_needs_the_token(guarded):
+    assert guarded.post("/changes", headers=SESSION).status_code == 401

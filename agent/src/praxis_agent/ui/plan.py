@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
-from ..tools.files import FileText, ImageFile, Listing
+from ..tools.files import FileText, ImageFile, Listing, WriteRecord
 from ..tools.run import RunResult
 
 Mode = Literal["conversation", "file", "code"]
@@ -111,6 +111,19 @@ class Ran(BaseModel):
     result: RunResult
 
 
+class ChangeList(BaseModel):
+    """The writes on record, newest first."""
+
+    writes: list[WriteRecord]
+
+
+class ChangeDetail(BaseModel):
+    """One write: what it changed, as a diff, if the text was kept."""
+
+    record: WriteRecord
+    diff: str | None
+
+
 Shown = (
     TextBlock
     | CodeBlock
@@ -123,6 +136,8 @@ Shown = (
     | Proposal
     | Changed
     | Ran
+    | ChangeList
+    | ChangeDetail
 )
 
 
