@@ -32,7 +32,15 @@ async def client(home, tmp_path_factory):
 async def test_only_the_write_tools_are_declared_as_changing_anything(client):
     tools = {tool.name: tool.annotations for tool in (await client.list_tools()).tools}
 
-    reads = {"allowed_folders", "list_directory", "search_files", "read_text_file", "read_image"}
+    reads = {
+        "allowed_folders",
+        "list_directory",
+        "search_files",
+        "read_text_file",
+        "read_image",
+        "recent_writes",
+        "write_details",
+    }
     writes = {"write_text_file", "undo_write"}
     assert set(tools) == reads | writes
     assert all(tools[name].read_only_hint for name in reads)

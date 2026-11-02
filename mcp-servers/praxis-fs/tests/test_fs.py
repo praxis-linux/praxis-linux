@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import json
 import os
 import subprocess
 import time
@@ -527,7 +528,7 @@ def test_a_change_is_undone_once(files, home):
     written = files.write_text_file("code/new.py", "x = 2\n")
     files.undo_write(written.backup)
 
-    with pytest.raises(AccessError, match="nothing|no change"):
+    with pytest.raises(AccessError, match="already undone"):
         files.undo_write(written.backup)
 
 
@@ -570,8 +571,8 @@ def test_backups_default_to_the_praxis_folder(monkeypatch, tmp_path):
 def test_a_file_that_appears_while_being_created_is_left_alone(files, home, monkeypatch, tmp_path):
     back_up = Files._back_up
 
-    def meanwhile(self, file, old, written):
-        backup = back_up(self, file, old, written)
+    def meanwhile(self, file, *rest):
+        backup = back_up(self, file, *rest)
         file.write_text("someone else's", encoding="utf-8")
         return backup
 
@@ -615,3 +616,101 @@ def test_old_backups_are_forgotten(files, home, tmp_path):
 
     assert not old.exists()
     assert len(list((tmp_path / "backups").iterdir())) == 1
+
+
+# --- The record of writes ---
+
+
+def test_a_write_is_on_record_with_where_it_came_from(files, home):
+    base = files.read_text_file("code/app.py").sha256
+    written = files.write_text_file(
+        "code/app.py", "print('bye')", base, origin="apply", proposed_by="local-fast"
+    )
+
+    (record,) = files.recent_writes().writes
+
+    assert record.backup == written.backup
+    assert record.path == str(home / "code" / "app.py")
+    assert (record.origin, record.proposed_by) == ("apply", "local-fast")
+    assert record.undoable and not record.undone and not record.created
+
+
+def test_the_newest_write_comes_first_and_the_list_is_bounded(files):
+    for name in ("one", "two", "three"):
+        files.write_text_file(f"code/{name}.py", "x")
+
+    assert [Path(r.path).stem for r in files.recent_writes().writes] == ["three", "two", "one"]
+    assert [Path(r.path).stem for r in files.recent_writes(limit=1).writes] == ["three"]
+
+
+def test_the_text_before_and_after_stays_on_record_even_if_the_file_changes(files, home):
+    written = files.write_text_file(
+        "code/app.py", "mine", files.read_text_file("code/app.py").sha256
+    )
+    write(home / "code" / "app.py", "changed again")
+
+    details = files.write_details(written.backup)
+
+    assert (details.original, details.written) == ("print('hi')", "mine")
+    assert not details.record.undoable
+
+
+def test_a_new_file_has_no_text_before_it(files):
+    written = files.write_text_file("code/new.py", "x = 2")
+
+    details = files.write_details(written.backup)
+
+    assert (details.original, details.written) == (None, "x = 2")
+    assert details.record.created
+
+
+def test_an_undone_write_stays_on_record_marked_as_such(files, home):
+    written = files.write_text_file(
+        "code/app.py", "mine", files.read_text_file("code/app.py").sha256
+    )
+
+    files.undo_write(written.backup)
+
+    (record,) = files.recent_writes().writes
+    assert record.undone and not record.undoable
+    assert files.write_details(written.backup).written == "mine"
+
+
+def test_a_record_from_before_records_kept_the_text_still_shows(files, home, tmp_path):
+    old = tmp_path / "backups" / "20261025T120000-0a1b2c3d"
+    old.mkdir(parents=True)
+    target = home / "code" / "app.py"
+    record = {"path": str(target), "sha256": sha(target.read_bytes()), "created": False}
+    (old / "write.json").write_text(json.dumps(record), encoding="utf-8")
+    (old / "original").write_text("before", encoding="utf-8")
+
+    details = files.write_details(old.name)
+
+    assert (details.original, details.written) == ("before", None)
+    assert details.record.origin == ""
+    assert details.record.undoable
+
+
+def test_writes_to_places_no_longer_allowed_are_not_shown(files, home, tmp_path):
+    written = files.write_text_file("code/new.py", "x")
+    other = Files([tmp_path / "outside"], backups=tmp_path / "backups")
+
+    assert other.recent_writes().writes == []
+    with pytest.raises(AccessError, match="outside"):
+        other.write_details(written.backup)
+
+
+def test_broken_records_and_odd_ids_are_skipped(files, tmp_path):
+    files.write_text_file("code/new.py", "x")
+    broken = tmp_path / "backups" / "20261025T120000-deadbeef"
+    broken.mkdir()
+    (broken / "write.json").write_text("not json", encoding="utf-8")
+    (tmp_path / "backups" / "unrelated").mkdir()
+
+    assert len(files.recent_writes().writes) == 1
+    with pytest.raises(AccessError, match="no change"):
+        files.write_details("../../outside")
+
+
+def test_with_no_writes_yet_the_record_is_empty(files):
+    assert files.recent_writes().writes == []
