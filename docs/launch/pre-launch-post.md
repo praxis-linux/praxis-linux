@@ -15,10 +15,10 @@ This is Phase 0, a spike: the Canvas runs as an app on an existing Linux (an App
 ### What works today
 
 - **Conversation, File and Code modes on one surface.** Ask "what did I work on this week?" and the Canvas lists those files; click one to read it, ask for a summary, open it in the editor, run it.
-- **The agent proposes; you decide.** Ask for a change to a file and you get a diff with Apply and Discard. Nothing is written until you apply it, every write can be undone, and a file changed since it was read is never overwritten.
+- **The agent proposes; you decide.** Ask for a change to a file and you get a diff with Apply and Discard. Nothing is written until you apply it, a file changed since it was read is never overwritten, and changes can be looked at and undone for 30 days, until the file changes again.
 - **Code runs in a sandbox.** Run uses bubblewrap: no network, system folders read-only, and the code can read its own folder but never change your files.
 - **Local first.** A 7B model on Ollama drives everything above. Cloud models (Claude, via a LiteLLM proxy you configure) are optional, and every cloud request is announced before it is sent.
-- **Legible and stoppable.** Every model call, file read, write and run is written to an audit log before it happens. Esc stops whatever the agent is doing.
+- **Legible and stoppable.** Every model call, file read, write and run is written to an audit log before it happens, and each write records whether it was yours or a model's, its new hash and its backup. Esc stops whatever the agent is doing.
 
 ### How it is built
 
@@ -27,7 +27,7 @@ This is Phase 0, a spike: the Canvas runs as an app on an existing Linux (an App
 - **Tools are MCP servers with narrow jobs.** `praxis-fs` reads and writes inside the folders you allow, and refuses hidden files like `.ssh` and `.env`. `praxis-run` runs one file in the sandbox. The model can ask for lookups; only your clicks write files or run code.
 - **Tauri + React for the Canvas, Python (FastAPI + PydanticAI) for the agent.** Apache 2.0.
 
-The design decisions, with the evidence behind them (including where the 7B model falls short), are in [ADR-003](../architecture/ADR-003-ui-wire-format.md).
+The boundaries are written down in the [security model](../SECURITY-MODEL.md): what the model can and cannot trigger, what the sandbox allows, what reaches a cloud provider, and the known limits. The design decisions, with the evidence behind them (including where the 7B model falls short), are in [ADR-003](../architecture/ADR-003-ui-wire-format.md).
 
 ### What does not work yet
 
@@ -35,6 +35,7 @@ The design decisions, with the evidence behind them (including where the 7B mode
 - No moving or deleting files, no Doc mode, no settings panel.
 - The model can change files of up to 4,000 characters; you can edit larger ones by hand.
 - The sandbox does not limit memory or the number of processes yet.
+- Undo is per file. Rolling back several changes together waits for Btrfs snapshots in Phase 1.
 - A 7B model uses the UI modestly: it seldom reaches for forms or follow-up cards unless asked. Larger local models do better.
 - Files can carry instructions aimed at the model (prompt injection). The design bounds what that can do: no write or run without your click, a diff before every change, no remote loads. It does not prevent it.
 

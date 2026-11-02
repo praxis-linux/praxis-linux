@@ -10,7 +10,7 @@ The name is from the Greek *praxis* (πρᾶξις) — *action; the moment thou
 
 ## Status
 
-**Phase 0 — Spike.** The Canvas runs as a Linux app: an AppImage, tested on Ubuntu and Arch, driven by a local model. Conversation, File and Code modes work; the agent proposes changes, you apply them, and every change can be undone. An ISO comes in Phase 1.
+**Phase 0 — Spike.** The Canvas runs as a Linux app: an AppImage, tested on Ubuntu and Arch, driven by a local model. Conversation, File and Code modes work; the agent proposes changes, you apply them, and changes can be looked at and undone for 30 days, until the file changes again. An ISO comes in Phase 1.
 
 ## Principles
 

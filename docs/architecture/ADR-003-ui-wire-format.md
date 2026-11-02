@@ -51,6 +51,7 @@ The planner asks the provider for JSON constrained to the plan's schema (Pydanti
 | `POST /intent` | `{"intent": "..."}` | The user typed a request |
 | `POST /action` | An A2UI v0.9 client-to-server `action` message | The user clicked something on a surface (section 7) |
 | `POST /resume` | — | The Canvas opened: show where this conversation left off, or nothing if it is new |
+| `POST /changes` | — | What Praxis has changed in the user's files: the Canvas's Changes button (section 12) |
 | `POST /stop` | — | The kill switch: end every turn the agent is working on, in every conversation. Answers `{"stopped": n}` |
 | `POST /forget` | — | Delete this conversation and what was read in it. Answers `{"forgotten": n}`; the audit log keeps its records |
 
@@ -86,8 +87,10 @@ Component ids are stable for that reason: the model's blocks are `b0`, `b1`, …
 | `apply` | `proposal` | Make the change the model proposed, unless the file has changed since |
 | `discard` | `proposal` | Drop the proposed change |
 | `undo` | `backup` | Put the file back as it was before a save or an applied change |
+| `changes` | — | Show what Praxis has changed |
+| `change` | `backup` | Show one change as a diff |
 
-The last six never call a model (section 12). Their context is checked before anything is streamed back, and a malformed one is rejected with HTTP 400. Any other action name is rejected without calling a model.
+The last eight never call a model (section 12). Their context is checked before anything is streamed back, and a malformed one is rejected with HTTP 400. Any other action name is rejected without calling a model.
 
 A context key must not be named `path` or `call`: A2UI reads an object with such a key as a data binding or a function call, and the context reaches the agent empty. That is why `open` carries `target`.
 
@@ -127,10 +130,10 @@ The model can propose; only the user's click acts. That is enforced by what each
 - **The model's only way to change a file is `propose_edit`.** The agent reads the file as it is now, shows the change as a diff with Apply and Discard, and keeps the proposed text itself, under a random id, until the user decides. The Canvas only ever sends that id back, so what is applied is exactly what was shown. Proposals are kept in memory: up to 20 per conversation, and none after the agent restarts. "Delete…" drops them too.
 - **A proposal is refused, with the reason on screen, for** a hidden file or one outside the allowed folders, a file that is not whole UTF-8 text, and a file longer than the 4,000 characters the model is shown of a file, since a change to the part it did not see would lose it. A file keeps its final line break, which small models tend to drop.
 - **Every write checks the file's hash.** `edit` reads the whole file (up to 64 KB) and its hash; `save` and `apply` pass that hash to `praxis-fs`, which refuses the write if the file has changed since. A new file is only created where none exists.
-- **Every write can be undone.** `praxis-fs` keeps what each write replaced in `~/.praxis/backups`, and `undo` restores it, unless the file has changed again since.
+- **A write can be undone for 30 days.** `praxis-fs` keeps the text before and after each write in `~/.praxis/backups`, and `undo` restores the old text unless the file has changed again since. The Changes button lists these with their diffs, so Undo is not limited to the screen right after a change. Neither is sent to the model.
 - **Running is a separate server, `praxis-run`, and only the user's Run asks for it.** The file runs in a bubblewrap sandbox: no network, the system folders read-only, a private `/tmp`, its own folder readable but never changed (where bubblewrap has overlays, writes there go to a layer thrown away at the end), hidden files and sockets in it masked at any depth, stopped after 10 seconds. Where that cannot work (Windows, macOS, no bubblewrap), the Canvas shows no Run button. What a run printed is added to the next prompt, so "why did that fail?" works.
 - **What the diff shows is what is written.** Lines are split at `\n` only, as interpreters split them; invisible and control characters (other line breaks, zero-width and bidirectional marks) are written out as `⟨U+XXXX⟩` with a warning, trailing whitespace is shown, and long lines wrap. Only the agent's own diffs are coloured as proposed changes: a `praxis-diff` fence, which the agent strips from the model's code.
-- **Every write and run is audited before it happens**, as asked for by the user. For writes the audit log records the path, how many characters and the expected hash, never the text; for an undo, which file it put back.
+- **Every write and run is audited before it happens**, as asked for by the user. For writes the audit log records the path, how many characters, the expected hash, whether it was a Save or an Apply and which model proposed it, then the new hash and the backup id, never the text; for an undo, which file it puts back, before it does.
 - **The kill switch stops file actions too**, as well as model turns.
 
 ## Evidence

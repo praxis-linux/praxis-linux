@@ -31,11 +31,15 @@ This document is the single source of truth for project progress. Every status u
 - [x] **M0.8** — First MCP server (filesystem) integrated end-to-end — `praxis-fs`; writing came with M0.11, moving and deleting are not built
 - [x] **M0.9** — Conversation mode functional (chat, streaming, memory) — conversations stored locally; long-term vector memory not started
 - [x] **M0.10** — File mode functional (browse, preview, search via intent) — previews for text and images (PNG, JPEG, GIF, WebP); PDF previews not yet
-- [x] **M0.11** — Code mode functional (open, edit, run a file with CodeMirror) — the model proposes changes as diffs the user applies; every write can be undone; files run in a bubblewrap sandbox (`praxis-run`, Linux only)
+- [x] **M0.11** — Code mode functional (open, edit, run a file with CodeMirror) — the model proposes changes as diffs the user applies; writes can be undone; files run in a bubblewrap sandbox (`praxis-run`, Linux only)
 - [x] **M0.12** — Privacy guardrails: audit log, cloud-call toast, kill switch hotkey (Esc, in the Canvas window; a system-wide hotkey comes with the Phase 1 session), deleting a conversation
 - [x] **M0.13** — 90-second demo video published; pre-launch post drafted — [the video](https://youtu.be/MgkO89fFu8c) (unlisted on YouTube, linked from the README); demo script and setup in [`examples/90s-demo`](../examples/90s-demo/README.md); post drafted in [`docs/launch`](launch/pre-launch-post.md)
 
-**Phase 0 progress: 12 / 13 milestones complete (~92%).** Exit criteria met: the 90-second video ✅, and the AppImage runs on Ubuntu 24.04 and Arch Linux ✅. Left: M0.3, the X handle and the domain.
+- [x] **M0.14** — An audit trail for writes: each one records its origin (Save or Apply), the model that proposed it, its new hash and its backup; each undo records its file
+- [x] **M0.15** — A record of changes: the Changes screen lists what Praxis changed in the last 30 days, with diffs and Undo
+- [x] **M0.16** — The boundaries written down: [security model](SECURITY-MODEL.md)
+
+**Phase 0 progress: 15 / 16 milestones complete (~94%).** Exit criteria met: the 90-second video ✅, and the AppImage runs on Ubuntu 24.04 and Arch Linux ✅. Left: M0.3, the X handle and the domain.
 
 ---
 

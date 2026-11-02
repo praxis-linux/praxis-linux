@@ -34,7 +34,7 @@ The [README](README.md#develop-run-it-from-the-source) shows how to run Praxis f
 
 Run `make lint` and `make test` before pushing (they need uv, pnpm and Rust). CI runs the same checks on every pull request, and builds the AppImage when the Tauri shell or the build script changes.
 
-Changes to what the agent may do to files, or to the sandbox, get the most scrutiny: say in the PR what a model or a file it reads could make the change do.
+Changes to what the agent may do to files, or to the sandbox, get the most scrutiny: say in the PR what a model or a file it reads could make the change do, and update the [security model](docs/SECURITY-MODEL.md) if a boundary moves.
 
 ## Commits
 

@@ -6,7 +6,7 @@ First-party Model Context Protocol servers for Praxis.
 
 | Server | Purpose | Status |
 |---|---|---|
-| [`praxis-fs`](praxis-fs/README.md) | Files: list, search, read text and images, write text files, undo a write | Built (M0.8; writing with M0.11). Moving and deleting are not built. |
+| [`praxis-fs`](praxis-fs/README.md) | Files: list, search, read text and images, write text files, undo a write, the record of writes | Built (M0.8; writing with M0.11). Moving and deleting are not built. |
 | [`praxis-run`](praxis-run/README.md) | Running one file the user picked (Python, shell, JavaScript) in a bubblewrap sandbox | Built (M0.11). Linux only. |
 | `praxis-shell` | Sandboxed shell sessions | Planned |
 | `praxis-browser` | Headless browser and web search | Planned |
