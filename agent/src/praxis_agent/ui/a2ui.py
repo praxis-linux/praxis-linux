@@ -10,11 +10,21 @@ from datetime import tzinfo
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..tools.files import MAX_EDIT_BYTES, Entry, FileText, ImageFile, Listing, human_size
+from ..tools.files import (
+    MAX_EDIT_BYTES,
+    Entry,
+    FileText,
+    ImageFile,
+    Listing,
+    WriteRecord,
+    human_size,
+)
 from ..tools.run import RunResult
 from .plan import (
     CardsBlock,
     Changed,
+    ChangeDetail,
+    ChangeList,
     CodeBlock,
     Editor,
     FormBlock,
@@ -44,7 +54,17 @@ TRAIL_LABEL_CHARS = 80
 _TEXT_VARIANT = {"heading": "h3", "body": "body", "caption": "caption"}
 
 # Blocks the agent makes rather than the model: what was looked up, opened or run.
-_AGENT_MADE = (Listing, FileText, ImageFile, Editor, Proposal, Changed, Ran)
+_AGENT_MADE = (
+    Listing,
+    FileText,
+    ImageFile,
+    Editor,
+    Proposal,
+    Changed,
+    Ran,
+    ChangeList,
+    ChangeDetail,
+)
 
 # The editor's language, by file suffix. The Canvas shows anything else as plain text.
 _LANGUAGES = {
@@ -177,6 +197,10 @@ def compile_screen(
             components.extend(_proposal(block_id, block))
         elif isinstance(block, Changed):
             components.extend(_changed(block_id, block))
+        elif isinstance(block, ChangeList):
+            components.extend(_change_list(block_id, block, timezone))
+        elif isinstance(block, ChangeDetail):
+            components.extend(_change_detail(block_id, block, timezone))
         elif isinstance(block, Ran):
             components.extend(
                 _ran(block_id, block.result, _runnable(block.result.path, screen.can_run))
@@ -525,6 +549,79 @@ def _changed(block_id: str, changed: Changed) -> list[Component]:
             "align": "center",
         },
     ]
+
+
+def _change_list(block_id: str, changes: ChangeList, timezone: tzinfo | None) -> list[Component]:
+    """The writes on record. Each can be looked at, and undone while the file is unchanged."""
+    note = (
+        "What Praxis has changed in the last 30 days. A change can be undone until "
+        "the file changes again."
+        if changes.writes
+        else "Praxis has not changed any files in the last 30 days."
+    )
+    components = [_plain(f"{block_id}_head", note, "caption")]
+    children = [f"{block_id}_head"]
+    for j, write in enumerate(changes.writes):
+        row_id = f"{block_id}_w{j}"
+        children.append(row_id)
+        buttons = [(f"{row_id}_show", "Show change", "change", {"backup": write.backup}, "default")]
+        if write.undoable:
+            buttons.append((f"{row_id}_undo", "Undo", "undo", {"backup": write.backup}, "default"))
+        components += [
+            _plain(f"{row_id}_name", _tilde(write.path), "h5"),
+            _plain(f"{row_id}_meta", _write_meta(write, timezone), "caption"),
+            *_buttons(f"{row_id}_actions", buttons),
+            {
+                "id": row_id,
+                "component": "Column",
+                "children": [f"{row_id}_name", f"{row_id}_meta", f"{row_id}_actions"],
+            },
+        ]
+    components.append({"id": block_id, "component": "Column", "children": children})
+    return components
+
+
+def _change_detail(block_id: str, detail: ChangeDetail, timezone: tzinfo | None) -> list[Component]:
+    """One write, with what it changed."""
+    write = detail.record
+    components = [
+        _plain(f"{block_id}_name", _tilde(write.path), "h5"),
+        _plain(f"{block_id}_meta", _write_meta(write, timezone), "caption"),
+    ]
+    children = [f"{block_id}_name", f"{block_id}_meta"]
+    if detail.diff:
+        components.append(_fenced(f"{block_id}_diff", detail.diff, "praxis-diff"))
+        children.append(f"{block_id}_diff")
+    else:
+        note = "The text of this change was not kept."
+        components.append(_plain(f"{block_id}_none", note, "caption"))
+        children.append(f"{block_id}_none")
+    buttons = [(f"{block_id}_all", "All changes", "changes", {}, "default")]
+    if write.undoable:
+        undo = (f"{block_id}_undo", "Undo", "undo", {"backup": write.backup}, "default")
+        buttons.insert(0, undo)
+    components.extend(_buttons(f"{block_id}_actions", buttons))
+    children.append(f"{block_id}_actions")
+    components.append({"id": block_id, "component": "Column", "children": children})
+    return components
+
+
+def _write_meta(write: WriteRecord, timezone: tzinfo | None) -> str:
+    """Where a change came from, when, and whether it can still be undone."""
+    if write.origin == "apply":
+        where = f"Proposed by {write.proposed_by or 'a model'}, applied by you"
+    elif write.origin == "save":
+        where = "Saved by you"
+    else:
+        where = "Changed through Praxis"
+    parts = [where, f"{write.at.astimezone(timezone):%Y-%m-%d %H:%M}"]
+    if write.created:
+        parts.append("new file")
+    if write.undone:
+        parts.append("undone")
+    elif not write.undoable:
+        parts.append("the file has changed since, so this cannot be undone")
+    return " · ".join(parts)
 
 
 def _ran(block_id: str, result: RunResult, runnable: bool) -> list[Component]:

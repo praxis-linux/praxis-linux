@@ -13,8 +13,10 @@ It does not ask the user anything: the agent only calls the write tools when the
 | `search_files` | `pattern`, `directory`, `modified_within_days` | Files under a folder at any depth whose name matches, newest first. |
 | `read_text_file` | `path`, `max_bytes` | The text of one file, cut off at `max_bytes` (at most 64,000). When the whole file was read and is UTF-8, also its `sha256`, which writing it back needs. |
 | `read_image` | `path` | A PNG, JPEG, GIF or WebP image, base64-encoded, up to 8 MB. Judged by the file's bytes, not its name; SVG is never read as an image, since it can carry script. |
-| `write_text_file` | `path`, `content`, `expected_sha256` | Writes a text file, up to 1 MB. To change a file, `expected_sha256` must be the hash it was read with; without it, only a new file is created. Returns the new hash and a `backup` id. |
-| `undo_write` | `backup` | Puts the file back as it was before that write (or removes a file the write created), unless it has changed since. Each backup undoes once. |
+| `write_text_file` | `path`, `content`, `expected_sha256`, `origin`, `proposed_by` | Writes a text file, up to 1 MB. To change a file, `expected_sha256` must be the hash it was read with; without it, only a new file is created. Returns the new hash and a `backup` id. |
+| `undo_write` | `backup` | Puts the file back as it was before that write (or removes a file the write created), unless it has changed since. Each write undoes once. |
+| `recent_writes` | `limit` | The writes on record, newest first: when, where they came from, and whether they can still be undone. |
+| `write_details` | `backup` | One write, with the text it replaced and the text it wrote. |
 
 Paths may be absolute, start with `~`, or be relative to the main folder. An empty path is the main folder.
 
@@ -23,7 +25,7 @@ Paths may be absolute, start with `~`, or be relative to the main folder. An emp
 ## Writing
 
 - **Never blind.** A change needs the hash the file had when it was read, so a file changed since (by the user, or another program) is not overwritten. A new file is only created where none exists, in a folder that already exists.
-- **Always undoable.** Before each write, what it replaces is kept in `~/.praxis/backups/<id>/`, which `praxis-fs` will not read and only you may (`0700`). Backups older than 30 days are removed, since they hold old versions of your files, secrets included.
+- **On record, and undoable for 30 days.** Before each write, the text it replaces and the text it writes are kept in `~/.praxis/backups/<id>/`, which only you may read (`0700`), with where the change came from. An undone write stays on record, marked as undone. Records older than 30 days are removed, since they hold old versions of your files, secrets included.
 - **Whole or not at all.** The new text is written to a private temporary file beside the old one, synced, and then put in its place in one step. A new file is linked into place, which fails rather than overwrite a file that appeared meanwhile. A file that used CRLF line endings keeps them, and an executable stays executable. If the write fails, its backup is removed too.
 - **The same rules as reading**: inside the allowed folders, nothing hidden.
 

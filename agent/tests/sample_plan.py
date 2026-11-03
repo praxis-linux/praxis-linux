@@ -2,12 +2,14 @@
 
 from datetime import UTC, datetime
 
-from praxis_agent.tools.files import Entry, FileText, ImageFile, Listing
+from praxis_agent.tools.files import Entry, FileText, ImageFile, Listing, WriteRecord
 from praxis_agent.tools.run import RunResult
 from praxis_agent.ui.plan import (
     Card,
     CardsBlock,
     Changed,
+    ChangeDetail,
+    ChangeList,
     CodeBlock,
     Editor,
     FormBlock,
@@ -125,4 +127,34 @@ SAMPLE_CODE_SCREEN = Screen(
         ),
     ],
     can_run=[".py"],
+)
+
+SAVED = WriteRecord(
+    backup="20261102T100000-0a1b2c3d",
+    path=APP,
+    at=datetime(2026, 11, 2, 10, 0, tzinfo=UTC),
+    created=False,
+    origin="save",
+    proposed_by=None,
+    undone=False,
+    undoable=True,
+)
+APPLIED = SAVED.model_copy(
+    update={
+        "backup": "20261102T090000-1a2b3c4d",
+        "at": datetime(2026, 11, 2, 9, 0, tzinfo=UTC),
+        "origin": "apply",
+        "proposed_by": "local-fast",
+        "undoable": False,
+    }
+)
+
+# The Changes screen: also written to a golden file for the Canvas tests.
+SAMPLE_CHANGES_SCREEN = Screen(
+    mode="file",
+    title="Recent changes",
+    blocks=[
+        ChangeList(writes=[SAVED, APPLIED]),
+        ChangeDetail(record=APPLIED, diff="--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-a\n+b"),
+    ],
 )

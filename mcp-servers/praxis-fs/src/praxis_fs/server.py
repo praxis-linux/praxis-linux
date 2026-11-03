@@ -16,6 +16,8 @@ from .fs import (
     Listing,
     Refused,
     Undone,
+    WriteDetails,
+    WriteHistory,
     Written,
     backups_from_env,
     roots_from_env,
@@ -89,21 +91,42 @@ def build_server(files: Files) -> MCPServer:
             return files.read_image(path)
 
     @server.tool(annotations=WRITES)
-    def write_text_file(path: str, content: str, expected_sha256: str | None = None) -> Written:
+    def write_text_file(
+        path: str,
+        content: str,
+        expected_sha256: str | None = None,
+        origin: str = "",
+        proposed_by: str | None = None,
+    ) -> Written:
         """Write a text file, keeping what it replaces.
 
         To change a file, pass the sha256 read_text_file gave for it; the write is
         refused if the file has changed since. Without it, only a new file is created.
-        The result's `backup` undoes the write with undo_write.
+        The result's `backup` undoes the write with undo_write. `origin` and
+        `proposed_by` say where the change came from, and are kept with the backup.
         """
         with _refusals_reach_the_client():
-            return files.write_text_file(path, content, expected_sha256)
+            return files.write_text_file(
+                path, content, expected_sha256, origin=origin, proposed_by=proposed_by
+            )
 
     @server.tool(annotations=WRITES)
     def undo_write(backup: str) -> Undone:
         """Put a file back as it was before a write, unless it has changed since."""
         with _refusals_reach_the_client():
             return files.undo_write(backup)
+
+    @server.tool(annotations=READ_ONLY)
+    def recent_writes(limit: int = 50) -> WriteHistory:
+        """The writes still on record, newest first: when, where from, and if they can
+        still be undone."""
+        return files.recent_writes(limit)
+
+    @server.tool(annotations=READ_ONLY)
+    def write_details(backup: str) -> WriteDetails:
+        """One write on record, with the text it replaced and the text it wrote."""
+        with _refusals_reach_the_client():
+            return files.write_details(backup)
 
     return server
 

@@ -1,0 +1,222 @@
+[
+  {
+    "version": "v0.9",
+    "deleteSurface": {
+      "surfaceId": "workspace"
+    }
+  },
+  {
+    "version": "v0.9",
+    "createSurface": {
+      "surfaceId": "workspace",
+      "catalogId": "praxis-linux:catalog:phase0"
+    }
+  },
+  {
+    "version": "v0.9",
+    "updateComponents": {
+      "surfaceId": "workspace",
+      "components": [
+        {
+          "id": "root",
+          "component": "Column",
+          "children": [
+            "title",
+            "f0",
+            "f1"
+          ]
+        },
+        {
+          "id": "title",
+          "component": "Text",
+          "text": "Recent changes",
+          "variant": "h2"
+        },
+        {
+          "id": "f0_head",
+          "component": "Text",
+          "text": "What Praxis has changed in the last 30 days. A change can be undone until the file changes again.",
+          "variant": "caption"
+        },
+        {
+          "id": "f0_w0_name",
+          "component": "Text",
+          "text": "/home/ada/projects/app.py",
+          "variant": "h5"
+        },
+        {
+          "id": "f0_w0_meta",
+          "component": "Text",
+          "text": "Saved by you · 2026-11-02 10:00",
+          "variant": "caption"
+        },
+        {
+          "id": "f0_w0_show_label",
+          "component": "Text",
+          "text": "Show change"
+        },
+        {
+          "id": "f0_w0_show",
+          "component": "Button",
+          "variant": "default",
+          "child": "f0_w0_show_label",
+          "action": {
+            "event": {
+              "name": "change",
+              "context": {
+                "backup": "20261102T100000-0a1b2c3d"
+              }
+            }
+          }
+        },
+        {
+          "id": "f0_w0_undo_label",
+          "component": "Text",
+          "text": "Undo"
+        },
+        {
+          "id": "f0_w0_undo",
+          "component": "Button",
+          "variant": "default",
+          "child": "f0_w0_undo_label",
+          "action": {
+            "event": {
+              "name": "undo",
+              "context": {
+                "backup": "20261102T100000-0a1b2c3d"
+              }
+            }
+          }
+        },
+        {
+          "id": "f0_w0_actions",
+          "component": "Row",
+          "children": [
+            "f0_w0_show",
+            "f0_w0_undo"
+          ],
+          "align": "center"
+        },
+        {
+          "id": "f0_w0",
+          "component": "Column",
+          "children": [
+            "f0_w0_name",
+            "f0_w0_meta",
+            "f0_w0_actions"
+          ]
+        },
+        {
+          "id": "f0_w1_name",
+          "component": "Text",
+          "text": "/home/ada/projects/app.py",
+          "variant": "h5"
+        },
+        {
+          "id": "f0_w1_meta",
+          "component": "Text",
+          "text": "Proposed by local-fast, applied by you · 2026-11-02 09:00 · the file has changed since, so this cannot be undone",
+          "variant": "caption"
+        },
+        {
+          "id": "f0_w1_show_label",
+          "component": "Text",
+          "text": "Show change"
+        },
+        {
+          "id": "f0_w1_show",
+          "component": "Button",
+          "variant": "default",
+          "child": "f0_w1_show_label",
+          "action": {
+            "event": {
+              "name": "change",
+              "context": {
+                "backup": "20261102T090000-1a2b3c4d"
+              }
+            }
+          }
+        },
+        {
+          "id": "f0_w1_actions",
+          "component": "Row",
+          "children": [
+            "f0_w1_show"
+          ],
+          "align": "center"
+        },
+        {
+          "id": "f0_w1",
+          "component": "Column",
+          "children": [
+            "f0_w1_name",
+            "f0_w1_meta",
+            "f0_w1_actions"
+          ]
+        },
+        {
+          "id": "f0",
+          "component": "Column",
+          "children": [
+            "f0_head",
+            "f0_w0",
+            "f0_w1"
+          ]
+        },
+        {
+          "id": "f1_name",
+          "component": "Text",
+          "text": "/home/ada/projects/app.py",
+          "variant": "h5"
+        },
+        {
+          "id": "f1_meta",
+          "component": "Text",
+          "text": "Proposed by local-fast, applied by you · 2026-11-02 09:00 · the file has changed since, so this cannot be undone",
+          "variant": "caption"
+        },
+        {
+          "id": "f1_diff",
+          "component": "Text",
+          "text": "```praxis-diff\n--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-a\n+b\n```",
+          "variant": "body"
+        },
+        {
+          "id": "f1_all_label",
+          "component": "Text",
+          "text": "All changes"
+        },
+        {
+          "id": "f1_all",
+          "component": "Button",
+          "variant": "default",
+          "child": "f1_all_label",
+          "action": {
+            "event": {
+              "name": "changes",
+              "context": {}
+            }
+          }
+        },
+        {
+          "id": "f1_actions",
+          "component": "Row",
+          "children": [
+            "f1_all"
+          ],
+          "align": "center"
+        },
+        {
+          "id": "f1",
+          "component": "Column",
+          "children": [
+            "f1_name",
+            "f1_meta",
+            "f1_diff",
+            "f1_actions"
+          ]
+        }
+      ]
+    }
+  }
+]

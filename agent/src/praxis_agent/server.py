@@ -38,6 +38,7 @@ from .planner import Draft, Looking, Proposing, Turn
 from .tools.files import (
     IMAGE_SUFFIXES,
     MODEL_FILE_CHARS,
+    ChangeDetails,
     FileRequest,
     FileText,
     FileTools,
@@ -49,11 +50,14 @@ from .tools.files import (
     ReadImage,
     ReadTextFile,
     RecentFiles,
+    RecentWrites,
     SearchFiles,
     ToolFailure,
     Undone,
     UndoWrite,
+    WriteDetails,
     WriteFile,
+    WriteHistory,
     Written,
     praxis_fs,
     relative,
@@ -61,7 +65,7 @@ from .tools.files import (
 from .tools.run import RunFile, RunResult, RunTools, praxis_run
 from .ui import Screen, build_trail, compile_screen, replace, update
 from .ui.a2ui import WORKSPACE_SURFACE
-from .ui.plan import Changed, Editor, Proposal, Ran, TextBlock
+from .ui.plan import Changed, ChangeDetail, ChangeList, Editor, Proposal, Ran, TextBlock
 
 log = logging.getLogger("praxis_agent")
 
@@ -79,7 +83,7 @@ MAX_SAVE_CHARS = 1_000_000
 MAX_PENDING = 20
 
 # Actions that act on a file the user chose, without a model.
-FILE_ACTIONS = {"edit", "save", "run", "apply", "discard", "undo"}
+FILE_ACTIONS = {"edit", "save", "run", "apply", "discard", "undo", "changes", "change"}
 
 
 class IntentRequest(BaseModel):
@@ -166,7 +170,11 @@ def file_action_args(action: Action) -> dict[str, str]:
             "base": context_text(action, "base", limit=64),
             "content": context_text(action, "content", limit=MAX_SAVE_CHARS, empty=True),
         }
-    key = {"apply": "proposal", "discard": "proposal", "undo": "backup"}.get(action.name, "target")
+    if action.name == "changes":
+        return {}
+    key = {"apply": "proposal", "discard": "proposal", "undo": "backup", "change": "backup"}.get(
+        action.name, "target"
+    )
     return {key: context_text(action, key)}
 
 
@@ -178,6 +186,8 @@ class PendingChange:
     # The hash the file had when the change was proposed; None for a new file.
     base: str | None
     content: str
+    # The model that proposed it.
+    proposed_by: str
 
 
 # Characters that change what text means without showing: controls, line and paragraph
@@ -280,9 +290,6 @@ def create_app(
     runners: dict[str, RunTools] = {}
     # Changes the model proposed, per conversation, by id.
     proposals: dict[str, dict[str, PendingChange]] = {}
-    # Which file each write this agent made changed, by backup id: so the audit log can
-    # say which file an undo puts back, before praxis-fs forgets the backup.
-    written_paths: dict[str, str] = {}
     # What each session's user is looking at: the file or folder on screen, if any.
     viewing: dict[str, str | None] = {}
     # Turns being worked on right now, so the kill switch can stop every one of them.
@@ -379,7 +386,7 @@ def create_app(
             # The Canvas went away mid-turn, or the agent is shutting down.
             audit_log.finish_tool(call_id, status="cancelled")
             raise
-        audit_log.finish_tool(call_id)
+        audit_log.finish_tool(call_id, result=_audited_outcome(result))
         return result
 
     async def stoppable(lines: AsyncIterator[str]) -> AsyncIterator[str]:
@@ -457,7 +464,7 @@ def create_app(
 
         screen = result.screen()
         if result.proposal is not None:
-            screen = await propose(session_id, result)
+            screen = await propose(session_id, result, route.model)
         screen.can_run = can_run()
         viewing[session_id] = shown = on_screen(screen, main_folder())
         # Stored before it is drawn: a Canvas that goes away during the last drawing
@@ -483,7 +490,7 @@ def create_app(
         for line in _trail(memory, session_id, current=n):
             yield line
 
-    async def propose(session_id: str, turn: Turn) -> Screen:
+    async def propose(session_id: str, turn: Turn, model: str) -> Screen:
         """The screen for a change the model proposed: the change as a diff, which the
         user applies or not. Nothing is written here."""
         proposal = turn.proposal
@@ -543,16 +550,13 @@ def create_app(
             path, base = current.path, current.sha256
         else:
             path, base = str(target), None
-        pending[change_id] = PendingChange(path=path, base=base, content=new)
+        pending[change_id] = PendingChange(path=path, base=base, content=new, proposed_by=model)
         diff, invisible = unified_diff(old, new, where)
         blocks.append(Proposal(id=change_id, path=path, diff=diff, created=current is None))
         if invisible:
-            warning = (
-                f"Careful: the new text holds {invisible} invisible or control "
-                f"character{'s' if invisible > 1 else ''}, shown as ⟨U+…⟩. They can change "
-                "what code does without showing in an editor."
+            blocks.append(
+                TextBlock(kind="text", style="caption", text=_invisible_warning(invisible))
             )
-            blocks.append(TextBlock(kind="text", style="caption", text=warning))
         if current is None:
             screen.title = f"New file {Path(path).name}"
         return screen
@@ -610,12 +614,11 @@ def create_app(
                 target, base, content = args["target"], args["base"], args["content"]
                 written = await use(
                     session_id,
-                    WriteFile(path=target, content=content, expected_sha256=base),
+                    WriteFile(path=target, content=content, expected_sha256=base, origin="save"),
                     "user",
                 )
                 assert isinstance(written, Written)
                 changed = Changed(path=written.path, created=written.created, backup=written.backup)
-                written_paths[written.backup] = written.path
                 screen = editing(changed, written.path, content, written.sha256)
             elif name == "run":
                 target = args["target"]
@@ -637,12 +640,15 @@ def create_app(
                     )
                     return
                 request = WriteFile(
-                    path=change.path, content=change.content, expected_sha256=change.base
+                    path=change.path,
+                    content=change.content,
+                    expected_sha256=change.base,
+                    origin="apply",
+                    proposed_by=change.proposed_by,
                 )
                 written = await use(session_id, request, "user")
                 assert isinstance(written, Written)
                 changed = Changed(path=written.path, created=written.created, backup=written.backup)
-                written_paths[written.backup] = written.path
                 screen = editing(changed, written.path, change.content, written.sha256)
             elif name == "discard":
                 proposals.get(session_id, {}).pop(args["proposal"], None)
@@ -650,9 +656,25 @@ def create_app(
                     kind="text", style="caption", text="Discarded. Nothing was changed."
                 )
                 screen = Screen(mode="code", title="Discarded", blocks=[note])
+            elif name == "changes":
+                history = await use(session_id, RecentWrites(), "user")
+                assert isinstance(history, WriteHistory)
+                listed = ChangeList(writes=history.writes)
+                screen = Screen(mode="file", title="Recent changes", blocks=[listed])
+            elif name == "change":
+                details = await use(session_id, ChangeDetails(backup=args["backup"]), "user")
+                assert isinstance(details, WriteDetails)
+                screen = Screen(
+                    mode="file",
+                    title=f"Change to {Path(details.record.path).name}",
+                    blocks=change_screen(details, main_folder()),
+                )
             else:
                 backup = args["backup"]
-                request = UndoWrite(backup=backup, path=written_paths.get(backup))
+                # Which file it will put back, for the audit log, before it does.
+                details = await use(session_id, ChangeDetails(backup=backup), "user")
+                assert isinstance(details, WriteDetails)
+                request = UndoWrite(backup=backup, path=details.record.path)
                 undone = await use(session_id, request, "user")
                 assert isinstance(undone, Undone)
                 where = relative(undone.path, main_folder())
@@ -730,6 +752,11 @@ def create_app(
     def resume_session(session_id: Annotated[str, Depends(session)]) -> StreamingResponse:
         return stream(resume(session_id))
 
+    @app.post("/changes")
+    def changes(session_id: Annotated[str, Depends(session)]) -> StreamingResponse:
+        """What Praxis has changed in the user's files, from the Canvas's Changes button."""
+        return stream(stoppable(on_file(session_id, "changes", {})))
+
     @app.post("/stop")
     def stop(session_id: Annotated[str, Depends(session)]) -> dict[str, int]:
         """The kill switch: end every turn the agent is working on, in every conversation.
@@ -791,6 +818,37 @@ def _trail(memory: Conversations, session_id: str, *, current: int) -> list[str]
         _line(type="a2ui", message=message)
         for message in build_trail(memory.turns(session_id), current=current)
     ]
+
+
+def change_screen(details: WriteDetails, main_folder: str) -> list[Any]:
+    """The blocks that show one write: its diff, and a warning if the diff needs one."""
+    if details.written is None:
+        return [ChangeDetail(record=details.record, diff=None)]
+    name = relative(details.record.path, main_folder)
+    diff, invisible = unified_diff(details.original or "", details.written, name)
+    blocks: list[Any] = [ChangeDetail(record=details.record, diff=diff)]
+    if invisible:
+        blocks.append(TextBlock(kind="text", style="caption", text=_invisible_warning(invisible)))
+    return blocks
+
+
+def _invisible_warning(count: int) -> str:
+    return (
+        f"Careful: the new text holds {count} invisible or control "
+        f"character{'s' if count > 1 else ''}, shown as ⟨U+…⟩. They can change "
+        "what code does without showing in an editor."
+    )
+
+
+def _audited_outcome(result: Any) -> dict[str, Any] | None:
+    """What a tool call did, for the audit log. Never a file's text."""
+    if isinstance(result, Written):
+        return result.model_dump(include={"sha256", "size", "created", "backup"})
+    if isinstance(result, Undone):
+        return result.model_dump()
+    if isinstance(result, RunResult):
+        return result.model_dump(include={"exit_code", "timed_out", "truncated", "seconds"})
+    return None
 
 
 def _run_for_model(result: RunResult, main_folder: str) -> str:

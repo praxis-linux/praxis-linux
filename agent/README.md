@@ -86,6 +86,8 @@ curl -N -X POST http://127.0.0.1:7729/intent \
 
 ## Who can talk to the agent
 
+The whole picture is in the [security model](../docs/SECURITY-MODEL.md).
+
 The agent listens on 127.0.0.1 only. It answers requests that name it as `127.0.0.1` or `localhost` and, if they carry an `Origin`, come from the Canvas. That stops a web page that points its own domain at this machine (DNS rebinding) from using the agent to read your files.
 
 Any program on this machine, run by any user, can still reach 127.0.0.1. So when `PRAXIS_AGENT_TOKEN` is set, every request but `/health` must carry it in `X-Praxis-Token`, and nothing else can read, write or run anything through the agent:
@@ -108,8 +110,9 @@ A file's text comes with **Edit** and, where files can be run, **Run**. Every ch
 - **The model proposes, it does not write.** Asked to change a file or create one, it answers with a `propose_edit` step: the path, a one-sentence summary and the complete new text. The agent reads the file as it is now and shows the change as a diff with **Apply** and **Discard**, keeping the proposed text itself, under an id, until the user decides. Apply writes exactly what was shown, checked against the file's hash then, and offers Undo. Proposals live in memory: 20 per conversation at most, and none survive a restart of the agent.
 - **What the model may change is limited**: not hidden files or ones outside the allowed folders; only whole UTF-8 text files of up to 4,000 characters, since that is all of a file the model is shown. The screen says why when it refuses.
 - **Undo** puts the file back as it was before the save or the applied change (or removes a file it created), unless the file has changed again since.
+- **The Changes button** (`POST /changes`) lists what Praxis has changed in the last 30 days, where each change came from, and whether it can still be undone; each one opens as a diff. The model is not told what this screen shows.
 - **Run** runs the saved file through [`praxis-run`](../mcp-servers/praxis-run/README.md), in a sandbox without network access that can read the file's folder but never change it, and shows what it printed. The model is told the exit code and the end of the output, so "why did that fail?" works. Where nothing can be run (not Linux, or no bubblewrap), there is no Run button; the agent logs why when it starts.
-- **The audit log** records each write, run and undo before it happens, as asked for by the user. For a write it keeps the path, the number of characters and the expected hash, never the text.
+- **The audit log** records each write, run and undo before it happens, as asked for by the user. For a write it keeps the path, the number of characters, the expected hash, whether it was a Save or an Apply and which model proposed it, then the new hash and the backup id; never the text.
 
 ## Conversations
 
@@ -134,10 +137,10 @@ An alias counts as local only if its name starts with `local-`. Anything else is
 Two tables in the audit database, each row written before the call it records:
 
 - `model_calls`: when, which session, which alias, local or cloud, what triggered it, how long the request was (as sent, with the note about what is on screen; earlier turns and lookup results come on top), how many model requests it took, how it ended and how long it took. Prompt text is not in the audit log; it is in the conversation store.
-- `tool_calls`: when, which session, which tool, with what arguments, whether the model or the user asked for it, and how it ended.
+- `tool_calls`: when, which session, which tool, with what arguments, whether the model or the user asked for it, how it ended, and what it did (`result`: for a write, its new hash and backup id; for a run, its exit code).
 
 ```bash
-sqlite3 ~/.praxis/audit.db 'SELECT started_at, tool, arguments, asked_by, status FROM tool_calls'
+sqlite3 ~/.praxis/audit.db 'SELECT started_at, tool, arguments, asked_by, status, result FROM tool_calls'
 ```
 
 ## Tests

@@ -10,6 +10,7 @@ interface Props {
   onStop: () => void;
   onNewConversation: () => void;
   onForgetConversation: () => void;
+  onShowChanges: () => void;
 }
 
 export default function IntentLayer({
@@ -20,6 +21,7 @@ export default function IntentLayer({
   onStop,
   onNewConversation,
   onForgetConversation,
+  onShowChanges,
 }: Props) {
   const [value, setValue] = useState("");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -74,6 +76,13 @@ export default function IntentLayer({
             title="Delete this conversation"
           >
             Delete…
+          </button>
+          <button
+            className="intent-new"
+            onClick={onShowChanges}
+            title="What Praxis has changed in your files, and what can still be undone"
+          >
+            Changes
           </button>
         </>
       )}

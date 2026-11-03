@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import golden from "../../../agent/tests/golden/workspace_messages.json";
 import trailGolden from "../../../agent/tests/golden/trail_messages.json";
 import codeGolden from "../../../agent/tests/golden/code_messages.json";
+import changesGolden from "../../../agent/tests/golden/changes_messages.json";
 import App from "../App";
 
 const GOLDEN: unknown[] = golden;
@@ -14,6 +15,8 @@ const GOLDEN: unknown[] = golden;
 const TRAIL: unknown[] = trailGolden;
 // A Code mode screen: a change just saved, the editor, a proposed change and a run.
 const CODE: unknown[] = codeGolden;
+// The Changes screen: two changes on record, and one of them shown as a diff.
+const CHANGES: unknown[] = changesGolden;
 
 interface SentRequest {
   path: string;
@@ -734,4 +737,39 @@ test("an agent that does not recognise this Canvas says so in plain words", asyn
   expect((await screen.findByRole("alert")).textContent).toBe(
     "The agent did not recognise this Canvas. Restart Praxis.",
   );
+});
+
+// --- The record of changes ---
+
+async function showChanges() {
+  agentAnswers([{ type: "mode", mode: "file" }, ...a2ui(CHANGES)]);
+  render(<App />);
+  await screen.findByText("Welcome to Praxis");
+  fireEvent.click(screen.getByText("Changes"));
+  await screen.findByText("Recent changes");
+}
+
+test("the Changes button asks the agent what has changed, with no model involved", async () => {
+  await showChanges();
+
+  expect(sent[0].path).toBe("/changes");
+  expect(screen.getByText("Saved by you · 2026-11-02 10:00")).toBeTruthy();
+  expect(document.querySelector("code.language-praxis-diff .diff-add")?.textContent).toContain("+b");
+  // Only the change whose file is still as written offers Undo.
+  expect(screen.getAllByText("Undo")).toHaveLength(1);
+});
+
+test("Show change, Undo and All changes send what they act on", async () => {
+  await showChanges();
+
+  fireEvent.click(screen.getAllByText("Show change")[1]);
+  fireEvent.click(screen.getByText("Undo"));
+  fireEvent.click(screen.getByText("All changes"));
+
+  await waitFor(() => expect(sent).toHaveLength(4));
+  expect(sent.slice(1).map((request) => request.body.action)).toMatchObject([
+    { name: "change", context: { backup: "20261102T090000-1a2b3c4d" } },
+    { name: "undo", context: { backup: "20261102T100000-0a1b2c3d" } },
+    { name: "changes" },
+  ]);
 });

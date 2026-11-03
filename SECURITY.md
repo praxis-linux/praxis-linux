@@ -15,6 +15,8 @@ We will acknowledge receipt within **72 hours** and aim to provide an initial as
 
 ## Scope
 
+What Praxis means to guarantee, and what it does not, is in the [security model](docs/SECURITY-MODEL.md).
+
 | In scope | Out of scope |
 |---|---|
 | Agent sandbox escapes | Issues in upstream packages (report to them directly) |
