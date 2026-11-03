@@ -8,7 +8,7 @@ The Phase 0 exit demo: intent, the Canvas changing mode, and a useful action. It
 
 1. You type what you want; the Canvas becomes what that needs. Conversation, File mode and Code mode, one surface.
 2. What the agent shows about your files comes from your files, not from the model's retelling.
-3. The agent proposes, you decide: a change is a diff until you apply it, and every change can be undone.
+3. The agent proposes, you decide: a change is a diff until you apply it, and changes can be looked at and undone for 30 days, until the file changes again.
 4. Code runs in a sandbox with no network access, which cannot change your files.
 5. Local first: the model runs on your machine. A cloud model is announced before every request.
 
@@ -32,7 +32,7 @@ Do a full run-through first: a 7B model words things differently each time, and 
 | 32–44 s | Type **show me projects/tally/tally.py**, then click **Run** | The script; the run fails with `ValueError: invalid literal for int()` | *Code runs sandboxed. No network.* |
 | 44–62 s | Type **fix the error** | "Writing a change to …tally.py…", then the diff: `int(` becomes `float(`; Apply and Discard; the mode badge says CODE | *The agent proposes. You decide.* |
 | 62–72 s | Click **Apply**, then **Run** | "Saved …", then `Spent in October: 531.70` | |
-| 72–80 s | Click **Undo** on the saved change, then show the conversation trail on the right | "Undone: … is back as it was." | *Every change can be undone.* |
+| 72–80 s | Click **Undo** on the saved change, then show the conversation trail on the right | "Undone: … is back as it was." | *Changes can be undone.* |
 | 80–90 s | End card | Praxis Linux · Phase 0 · Apache 2.0 · github.com/praxis-linux/praxis-linux | *Local first. Open all the way down.* |
 
 If time allows, swap the Undo shot for the kill switch: type a long request and press **Esc** while the reply streams.

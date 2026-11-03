@@ -106,6 +106,34 @@ class Undone(BaseModel):
     removed: bool
 
 
+class WriteRecord(BaseModel):
+    """One write, as kept with its backup."""
+
+    backup: str
+    path: str
+    at: datetime
+    created: bool
+    # What asked for the write, in the caller's words; empty on older records.
+    origin: str
+    # The model that proposed the text, when one did.
+    proposed_by: str | None
+    undone: bool
+    # Whether undo_write would work now: not undone, and the file is still as written.
+    undoable: bool
+
+
+class WriteHistory(BaseModel):
+    writes: list[WriteRecord]
+
+
+class WriteDetails(BaseModel):
+    record: WriteRecord
+    # What the file held before; None when the write created it.
+    original: str | None
+    # What the write put there; None on older records, which did not keep it.
+    written: str | None
+
+
 def roots_from_env() -> list[Path]:
     """Allowed roots from PRAXIS_FS_ROOTS (os.pathsep-separated); the home folder by default."""
     raw = os.environ.get("PRAXIS_FS_ROOTS", "")
@@ -239,13 +267,20 @@ class Files:
         )
 
     def write_text_file(
-        self, path: str, content: str, expected_sha256: str | None = None
+        self,
+        path: str,
+        content: str,
+        expected_sha256: str | None = None,
+        *,
+        origin: str = "",
+        proposed_by: str | None = None,
     ) -> Written:
         """Write `content` to the file at `path`, keeping what it replaces.
 
         With `expected_sha256` the file must exist and still have that hash; without
         it the file must not exist yet, and is created. A file that used CRLF line
-        endings keeps them.
+        endings keeps them. `origin` and `proposed_by` are kept with the backup, to say
+        later where the change came from.
         """
         file = self.resolve(path)
         data = content.encode("utf-8")
@@ -269,7 +304,7 @@ class Files:
                 data = data.replace(b"\n", b"\r\n")
         written = _sha256(data)
         try:
-            backup = self._back_up(file, old, written)
+            backup = self._back_up(file, old, data, origin, proposed_by)
         except OSError as error:
             raise AccessError(
                 f"No copy of {path} could be kept to undo with, so it was not changed."
@@ -289,15 +324,13 @@ class Files:
     def undo_write(self, backup: str) -> Undone:
         """Put a file back as it was before the write that made `backup`.
 
-        Refused if the file has changed since that write. A backup is used once.
+        Refused if the file has changed since that write. A write is undone once; its
+        record stays, marked as undone, until it is forgotten with the other backups.
         """
         folder = self.backups / backup
-        try:
-            if not _BACKUP_ID.fullmatch(backup):
-                raise OSError
-            record = json.loads((folder / "write.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError) as error:
-            raise AccessError("There is no change with that id to undo.") from error
+        record = self._read_record(backup)
+        if record.get("undone"):
+            raise AccessError("That change was already undone.")
         file = self.resolve(record["path"])
         current = file.read_bytes() if file.is_file() else None
         if current is None or _sha256(current) != record["sha256"]:
@@ -306,11 +339,72 @@ class Files:
             file.unlink()
         else:
             _put(file, (folder / "original").read_bytes(), create=False)
-        shutil.rmtree(folder, ignore_errors=True)
+        record["undone"] = True
+        (folder / "write.json").write_text(json.dumps(record), encoding="utf-8")
         return Undone(path=str(file), removed=record["created"])
 
-    def _back_up(self, file: Path, old: bytes | None, written: str) -> str:
-        """Keep `old`, what `file` held before a write, under a new backup id."""
+    def recent_writes(self, limit: int = 50) -> WriteHistory:
+        """The writes still on record, newest first, for files that may still be read."""
+        found = []
+        if self.backups.is_dir():
+            for folder in self.backups.iterdir():
+                try:
+                    record = self._read_record(folder.name)
+                    self.resolve(record["path"])
+                except AccessError:
+                    continue
+                found.append((_written_at(folder.name, record), folder.name, record))
+        found.sort(key=lambda write: write[0], reverse=True)
+        return WriteHistory(
+            writes=[
+                self._describe(backup, record)
+                for _, backup, record in found[: max(1, min(limit, MAX_ENTRIES))]
+            ]
+        )
+
+    def write_details(self, backup: str) -> WriteDetails:
+        """One write, with the text it replaced and the text it wrote."""
+        record = self._read_record(backup)
+        self.resolve(record["path"])
+        folder = self.backups / backup
+        return WriteDetails(
+            record=self._describe(backup, record),
+            original=_text_at(folder / "original"),
+            written=_text_at(folder / "written"),
+        )
+
+    def _read_record(self, backup: str) -> dict:
+        try:
+            if not _BACKUP_ID.fullmatch(backup):
+                raise OSError
+            record = json.loads((self.backups / backup / "write.json").read_text(encoding="utf-8"))
+            if not isinstance(record.get("path"), str):
+                raise ValueError
+        except (OSError, ValueError) as error:
+            raise AccessError("There is no change with that id.") from error
+        return record
+
+    def _describe(self, backup: str, record: dict) -> WriteRecord:
+        file = Path(record["path"])
+        undone = bool(record.get("undone"))
+        return WriteRecord(
+            backup=backup,
+            path=record["path"],
+            at=_written_at(backup, record),
+            created=bool(record.get("created")),
+            origin=record.get("origin", ""),
+            proposed_by=record.get("proposed_by"),
+            undone=undone,
+            undoable=not undone
+            and file.is_file()
+            and _sha256(file.read_bytes()) == record.get("sha256"),
+        )
+
+    def _back_up(
+        self, file: Path, old: bytes | None, data: bytes, origin: str, proposed_by: str | None
+    ) -> str:
+        """Keep what `file` held before a write, and what the write puts there, under a
+        new backup id."""
         # Backups hold old versions of the user's files: only the user may read them.
         self.backups.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.backups.mkdir(exist_ok=True, mode=0o700)
@@ -320,7 +414,15 @@ class Files:
         folder.mkdir(mode=0o700)
         if old is not None:
             (folder / "original").write_bytes(old)
-        record = {"path": str(file), "sha256": written, "created": old is None}
+        (folder / "written").write_bytes(data)
+        record = {
+            "path": str(file),
+            "sha256": _sha256(data),
+            "created": old is None,
+            "at": datetime.now(UTC).isoformat(),
+            "origin": origin,
+            "proposed_by": proposed_by,
+        }
         (folder / "write.json").write_text(json.dumps(record), encoding="utf-8")
         return backup
 
@@ -410,6 +512,20 @@ def _globs(pattern: str) -> list[str]:
         else:
             globs.append(f"*{part}*")
     return globs or ["*"]
+
+
+def _written_at(backup: str, record: dict) -> datetime:
+    """When a write happened: from its record, or on older records from its id."""
+    if "at" in record:
+        return datetime.fromisoformat(record["at"])
+    return datetime.strptime(backup[:15], "%Y%m%dT%H%M%S").astimezone(UTC)
+
+
+def _text_at(path: Path) -> str | None:
+    try:
+        return path.read_bytes().decode("utf-8", errors="replace")
+    except OSError:
+        return None
 
 
 def _sha256(data: bytes) -> str:

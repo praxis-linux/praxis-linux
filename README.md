@@ -15,14 +15,16 @@ The name is from the Greek *praxis* (πρᾶξις) — *action; the moment thou
 
 ## Status
 
-**Phase 0 · Spike — 12 of 13 milestones done.** The Canvas runs as an app on an existing Linux, packaged as an AppImage. Once the idea is proven, Phase 1 wraps it into a bootable ISO. See the [Roadmap](docs/ROADMAP.md) for the full plan.
+**Phase 0 · Spike — 15 of 16 milestones done.** The Canvas runs as an app on an existing Linux, packaged as an AppImage. Once the idea is proven, Phase 1 wraps it into a bootable ISO. See the [Roadmap](docs/ROADMAP.md) for the full plan.
 
 What works today, on a local model ([90-second demo](https://youtu.be/MgkO89fFu8c)):
 
 - **Conversation, File and Code modes on one surface.** Ask "what did I work on this week?" and the Canvas lists those files; open one, ask for a summary, edit it, run it.
-- **The agent proposes; you decide.** A change to a file is a diff until you press Apply, and every change can be undone.
+- **The agent proposes; you decide.** A change to a file is a diff until you press Apply, and changes can be looked at and undone for 30 days, until the file changes again.
 - **Code runs in a sandbox** (bubblewrap): no network, and it cannot change your files.
 - **Local first, legible, stoppable.** Cloud models are optional and announced before every request; every model call, file read, write and run is audited before it happens; Esc stops the agent.
+
+What the agent can and cannot reach, and how to audit it, is in the [security model](docs/SECURITY-MODEL.md).
 
 Not yet: an ISO, moving or deleting files, Doc mode, the settings panel. This repository is intentionally early. Star it to follow along.
 
@@ -71,7 +73,7 @@ Ctrl+C stops everything.
 
 **On Windows**, the desktop window is easiest through WSL: `--wsl` copies your working tree into WSL (Ubuntu-24.04 unless you name another distro) and starts everything there. Ollama can stay on Windows; your API keys are passed across. Inside WSL you need Rust, uv, Node with corepack and the Tauri prerequisites for Linux. The agent then reads your WSL home folder, not your Windows one. Building natively on Windows also works, but not with Smart App Control on: it blocks the helper programs a Rust build compiles and runs. To run the pieces yourself, see [`agent/README.md`](agent/README.md) and [`canvas/README.md`](canvas/README.md).
 
-Type an intent in the bar at the bottom — try "what is in my Documents folder?". The agent answers from a local model. It can look at the files in your home folder, hidden ones excepted. Open a file and press **Edit** to change it, or **Run** to run it (Linux, with bubblewrap installed). Ask the agent to change a file and it shows the change as a diff: nothing is written until you press **Apply**, and every change can be undone.
+Type an intent in the bar at the bottom — try "what is in my Documents folder?". The agent answers from a local model. It can look at the files in your home folder, hidden ones excepted. Open a file and press **Edit** to change it, or **Run** to run it (Linux, with bubblewrap installed). Ask the agent to change a file and it shows the change as a diff: nothing is written until you press **Apply**. The **Changes** button lists what Praxis has changed, with the diffs and Undo.
 
 To use a cloud model instead, set `ANTHROPIC_API_KEY` and add `--model cloud-fast` (Claude Haiku) or `--model cloud-strong` (Claude Opus). The file names and contents the agent looks at then go to Anthropic, and the Canvas says so before each request.
 
@@ -97,7 +99,7 @@ Where Praxis is going. Today, in Phase 0: the Canvas (Tauri, React, A2UI); the a
 └─────────────────────────────────────────────────┘
 ```
 
-Detail: [`ADR-001` — strategic positioning](docs/architecture/ADR-001-strategic-positioning.md), [`ADR-002` — name and namespace](docs/architecture/ADR-002-name-and-namespace.md), [`ADR-003` — UI wire format](docs/architecture/ADR-003-ui-wire-format.md)
+Detail: [`ADR-001` — strategic positioning](docs/architecture/ADR-001-strategic-positioning.md), [`ADR-002` — name and namespace](docs/architecture/ADR-002-name-and-namespace.md), [`ADR-003` — UI wire format](docs/architecture/ADR-003-ui-wire-format.md), [security model](docs/SECURITY-MODEL.md)
 
 ## Naming convention
 

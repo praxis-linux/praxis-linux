@@ -52,6 +52,7 @@ export default function App({ session: provided }: Props) {
           onStop={() => void session.stop()}
           onNewConversation={() => session.newConversation()}
           onForgetConversation={() => void session.forgetConversation()}
+          onShowChanges={() => void session.showChanges()}
         />
       </div>
     </MarkdownContext.Provider>

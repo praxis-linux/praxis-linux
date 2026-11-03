@@ -108,6 +108,11 @@ export class CanvasSession {
     return this.run((signal) => this.agent.intent(this.conversation, intent, signal));
   }
 
+  /** Shows what Praxis has changed in the user's files. No model is involved. */
+  showChanges(): Promise<void> {
+    return this.run((signal) => this.agent.changes(this.conversation, signal));
+  }
+
   /** Leaves this conversation, which the agent keeps, and starts an empty one. */
   newConversation() {
     this.turn?.abort();

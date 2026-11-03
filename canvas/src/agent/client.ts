@@ -55,6 +55,8 @@ export interface AgentClient {
   action(sessionId: string, action: ActionPayload, signal: AbortSignal): AsyncIterable<AgentEvent>;
   /** Where a conversation left off: its last screen and its trail. Nothing if it is new. */
   resume(sessionId: string, signal: AbortSignal): AsyncIterable<AgentEvent>;
+  /** What Praxis has changed in the user's files, and what can still be undone. */
+  changes(sessionId: string, signal: AbortSignal): AsyncIterable<AgentEvent>;
   /** The kill switch: end every turn the agent is working on. */
   stop(sessionId: string): Promise<void>;
   /** Delete a conversation and what was read during it. */
@@ -66,6 +68,7 @@ export interface AgentClient {
 export const httpAgent: AgentClient = {
   intent: (sessionId, intent, signal) => post("/intent", { intent }, sessionId, signal),
   resume: (sessionId, signal) => post("/resume", {}, sessionId, signal),
+  changes: (sessionId, signal) => post("/changes", {}, sessionId, signal),
   stop: (sessionId) => command("/stop", sessionId),
   forget: (sessionId) => command("/forget", sessionId),
   ready: () => (isTauri() ? agentUp() : Promise.resolve()),

@@ -10,6 +10,7 @@ from praxis_agent.ui.a2ui import MAX_BLOCKS, MAX_CARDS, build_messages, build_tr
 from praxis_agent.ui.plan import (
     Card,
     CardsBlock,
+    ChangeList,
     CodeBlock,
     Editor,
     FormBlock,
@@ -19,7 +20,7 @@ from praxis_agent.ui.plan import (
     Screen,
     TextBlock,
 )
-from sample_plan import APP, SAMPLE_CODE_SCREEN, SAMPLE_SCREEN
+from sample_plan import APP, SAMPLE_CHANGES_SCREEN, SAMPLE_CODE_SCREEN, SAMPLE_SCREEN
 
 # Also read by canvas/src/a2ui/contract.test.tsx, which feeds them to the real renderer.
 GOLDEN = Path(__file__).parent / "golden" / "workspace_messages.json"
@@ -452,3 +453,43 @@ def test_the_model_cannot_pass_its_code_off_as_a_proposed_change():
     fake = CodeBlock(kind="code", language="praxis-diff", code="+rm -rf ~")
 
     assert components_of(build(screen(fake)))["b0"]["text"] == "```\n+rm -rf ~\n```"
+
+
+# --- The Changes screen ---
+
+CHANGES_GOLDEN = Path(__file__).parent / "golden" / "changes_messages.json"
+
+
+def test_the_changes_screen_matches_golden():
+    assert matches_golden(build(SAMPLE_CHANGES_SCREEN), CHANGES_GOLDEN)
+
+
+def test_each_change_says_where_it_came_from_and_if_it_can_be_undone():
+    components = components_of(build(SAMPLE_CHANGES_SCREEN))
+
+    assert components["f0_w0_meta"]["text"] == "Saved by you · 2026-11-02 10:00"
+    assert components["f0_w0_actions"]["children"] == ["f0_w0_show", "f0_w0_undo"]
+    assert components["f0_w1_meta"]["text"] == (
+        "Proposed by local-fast, applied by you · 2026-11-02 09:00"
+        " · the file has changed since, so this cannot be undone"
+    )
+    assert components["f0_w1_actions"]["children"] == ["f0_w1_show"]
+    assert event(components["f0_w1_show"]) == {
+        "name": "change",
+        "context": {"backup": "20261102T090000-1a2b3c4d"},
+    }
+
+
+def test_one_change_shows_its_diff_and_the_way_back():
+    components = components_of(build(SAMPLE_CHANGES_SCREEN))
+
+    assert components["f1_diff"]["text"].startswith("```praxis-diff\n--- a/app.py")
+    assert components["f1_actions"]["children"] == ["f1_all"]
+    assert event(components["f1_all"])["name"] == "changes"
+
+
+def test_with_no_changes_the_screen_says_so():
+    components = components_of(build(screen(ChangeList(writes=[]))))
+
+    assert components["f0"]["children"] == ["f0_head"]
+    assert "has not changed any files" in components["f0_head"]["text"]
